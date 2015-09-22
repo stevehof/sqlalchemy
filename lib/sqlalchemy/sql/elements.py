@@ -24,6 +24,21 @@ import numbers
 
 import re
 import operator
+import logging
+import warnings
+
+# This can be set to 'log:LEVEL' to log, 'warning' to warn, or 'error' to raise an Exception; anything else will ignore
+NONE_CLAUSE_HANDLING = 'warning'
+
+
+class NoneClauseWarning(RuntimeWarning):
+    """Indicates that somebody is using None as a a boolean clause, which is usually a problem"""
+    pass
+
+
+class NoneClauseError(RuntimeError):
+    """Indicates that somebody is using None as a a boolean clause, which is usually a problem"""
+    pass
 
 
 def _clone(element, **kw):
@@ -1930,6 +1945,18 @@ class BooleanClauseList(ClauseList, ColumnElement):
             :func:`.or_`
 
         """
+        if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
+            if not isinstance(clauses, (list, tuple)):
+                clauses = list(clauses)
+            if None in clauses:
+                if NONE_CLAUSE_HANDLING == "warning":
+                    warnings.warn("Use of None in and_", NoneClauseWarning)
+                    clauses = [clause for clause in clauses if clause is not None]
+                elif NONE_CLAUSE_HANDLING == "error":
+                    raise NoneClauseError("Use of None in and_")
+                else:
+                    level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
+                    logging.log(level, "Use of None in and_: %r", clauses)
         return cls._construct(operators.and_, True_, False_, *clauses)
 
     @classmethod
@@ -1962,6 +1989,18 @@ class BooleanClauseList(ClauseList, ColumnElement):
             :func:`.and_`
 
         """
+        if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
+            if not isinstance(clauses, (list, tuple)):
+                clauses = list(clauses)
+            if None in clauses:
+                if NONE_CLAUSE_HANDLING == "warning":
+                    warnings.warn("Use of None in or_", NoneClauseWarning)
+                    clauses = [clause for clause in clauses if clause is not None]
+                elif NONE_CLAUSE_HANDLING == "error":
+                    raise NoneClauseError("Use of None in or_")
+                else:
+                    level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
+                    logging.log(level, "Use of None in or_: %r", clauses)
         return cls._construct(operators.or_, False_, True_, *clauses)
 
     @property
