@@ -24,6 +24,21 @@ import numbers
 
 import re
 import operator
+import logging
+import warnings
+
+# This can be set to 'log:LEVEL' to log, 'warning' to warn, or 'error' to raise an Exception; anything else will ignore
+NONE_CLAUSE_HANDLING = 'log:WARN'
+
+
+class NoneClauseWarning(RuntimeWarning):
+    """Indicates that somebody is using None as a a boolean clause, which is usually a problem"""
+    pass
+
+
+class NoneClauseError(RuntimeError):
+    """Indicates that somebody is using None as a a boolean clause, which is usually a problem"""
+    pass
 
 
 def _clone(element, **kw):
@@ -1768,7 +1783,7 @@ class ClauseList(ClauseElement):
         self.group_contents = kwargs.pop('group_contents', True)
         text_converter = kwargs.pop(
             '_literal_as_text',
-            _expression_literal_as_text)
+            _bool_expression_literal_as_text)
         if self.group_contents:
             self.clauses = [
                 text_converter(clause).self_group(against=self.operator)
@@ -1842,7 +1857,7 @@ class BooleanClauseList(ClauseList, ColumnElement):
 
         clauses = util.coerce_generator_arg(clauses)
         for clause in clauses:
-            clause = _expression_literal_as_text(clause)
+            clause = _bool_expression_literal_as_text(clause)
 
             if isinstance(clause, continue_on):
                 continue
@@ -1906,6 +1921,19 @@ class BooleanClauseList(ClauseList, ColumnElement):
             :func:`.or_`
 
         """
+        if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
+            if not isinstance(clauses, (list, tuple)):
+                clauses = list(clauses)
+            if type(None) in map(type, clauses):
+                if NONE_CLAUSE_HANDLING == "warning":
+                    warnings.warn("Use of None in and_", NoneClauseWarning)
+                    clauses = [clause for clause in clauses if clause is not None]
+                elif NONE_CLAUSE_HANDLING == "error":
+                    raise NoneClauseError("Use of None in and_")
+                else:
+                    level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
+                    logging.log(level, "Use of None in and_: %r", clauses)
+                    clauses = [clause for clause in clauses if clause is not None]
         return cls._construct(operators.and_, True_, False_, *clauses)
 
     @classmethod
@@ -1938,6 +1966,19 @@ class BooleanClauseList(ClauseList, ColumnElement):
             :func:`.and_`
 
         """
+        if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
+            if not isinstance(clauses, (list, tuple)):
+                clauses = list(clauses)
+            if type(None) in map(type, clauses):
+                if NONE_CLAUSE_HANDLING == "warning":
+                    warnings.warn("Use of None in or_", NoneClauseWarning)
+                    clauses = [clause for clause in clauses if clause is not None]
+                elif NONE_CLAUSE_HANDLING == "error":
+                    raise NoneClauseError("Use of None in or_")
+                else:
+                    level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
+                    logging.log(level, "Use of None in or_: %r", clauses)
+                    clauses = [clause for clause in clauses if clause is not None]
         return cls._construct(operators.or_, False_, True_, *clauses)
 
     @property
@@ -2965,7 +3006,7 @@ class FunctionFilter(ColumnElement):
         """
 
         for criterion in list(criterion):
-            criterion = _expression_literal_as_text(criterion)
+            criterion = _bool_expression_literal_as_text(criterion)
 
             if self.criterion is not None:
                 self.criterion = self.criterion & criterion
@@ -3740,6 +3781,21 @@ def _literal_and_labels_as_label_reference(element):
         return _label_reference(element)
     else:
         return _literal_as_text(element)
+
+
+def _bool_expression_literal_as_text(element):
+    """Converts a boolean expression into text, but warn if None is passed in, to avoid NULL boolean expressions"""
+    if element is None:
+        if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
+            if NONE_CLAUSE_HANDLING == "warning":
+                warnings.warn("Use of None in expression", NoneClauseWarning, 2)
+            elif NONE_CLAUSE_HANDLING == "error":
+                raise NoneClauseError("Use of None in expression")
+            else:
+                level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
+                logging.log(level, "Use of None in expression")
+        return TextClause("")
+    return _expression_literal_as_text(element)
 
 
 def _expression_literal_as_text(element):
