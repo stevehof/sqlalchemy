@@ -1783,7 +1783,7 @@ class ClauseList(ClauseElement):
         self.group_contents = kwargs.pop('group_contents', True)
         text_converter = kwargs.pop(
             '_literal_as_text',
-            _expression_literal_as_text)
+            _bool_expression_literal_as_text)
         if self.group_contents:
             self.clauses = [
                 text_converter(clause).self_group(against=self.operator)
@@ -1857,7 +1857,7 @@ class BooleanClauseList(ClauseList, ColumnElement):
 
         clauses = util.coerce_generator_arg(clauses)
         for clause in clauses:
-            clause = _expression_literal_as_text(clause)
+            clause = _bool_expression_literal_as_text(clause)
 
             if isinstance(clause, continue_on):
                 continue
@@ -3004,7 +3004,7 @@ class FunctionFilter(ColumnElement):
         """
 
         for criterion in list(criterion):
-            criterion = _expression_literal_as_text(criterion)
+            criterion = _bool_expression_literal_as_text(criterion)
 
             if self.criterion is not None:
                 self.criterion = self.criterion & criterion
@@ -3780,6 +3780,20 @@ def _literal_and_labels_as_label_reference(element):
     else:
         return _literal_as_text(element)
 
+
+def _bool_expression_literal_as_text(element):
+    """Converts a boolean expression into text, but warn if None is passed in, to avoid NULL boolean expressions"""
+    if element is None:
+        if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
+            if NONE_CLAUSE_HANDLING == "warning":
+                warnings.warn("Use of None in expression", NoneClauseWarning, 2)
+            elif NONE_CLAUSE_HANDLING == "error":
+                raise NoneClauseError("Use of None in expression")
+            else:
+                level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
+                logging.log(level, "Use of None in expression")
+        return TextClause("")
+    return _expression_literal_as_text(element)
 
 def _expression_literal_as_text(element):
     return _literal_as_text(element, warn=True)

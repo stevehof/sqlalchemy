@@ -1298,7 +1298,7 @@ class Query(object):
 
         """
         for criterion in list(criterion):
-            criterion = expression._expression_literal_as_text(criterion)
+            criterion = expression._bool_expression_literal_as_text(criterion)
 
             criterion = self._adapt_clause(criterion, True, True)
 
@@ -1397,7 +1397,7 @@ class Query(object):
 
         """
 
-        criterion = expression._expression_literal_as_text(criterion)
+        criterion = expression._bool_expression_literal_as_text(criterion)
 
         if criterion is not None and \
                 not isinstance(criterion, sql.ClauseElement):
