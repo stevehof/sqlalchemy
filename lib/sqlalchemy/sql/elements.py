@@ -1948,7 +1948,7 @@ class BooleanClauseList(ClauseList, ColumnElement):
         if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
             if not isinstance(clauses, (list, tuple)):
                 clauses = list(clauses)
-            if None in clauses:
+            if type(None) in map(type, clauses):
                 if NONE_CLAUSE_HANDLING == "warning":
                     warnings.warn("Use of None in and_", NoneClauseWarning)
                     clauses = [clause for clause in clauses if clause is not None]
@@ -1992,7 +1992,7 @@ class BooleanClauseList(ClauseList, ColumnElement):
         if NONE_CLAUSE_HANDLING in ("warning", "error") or NONE_CLAUSE_HANDLING.startswith("log:"):
             if not isinstance(clauses, (list, tuple)):
                 clauses = list(clauses)
-            if None in clauses:
+            if type(None) in map(type, clauses):
                 if NONE_CLAUSE_HANDLING == "warning":
                     warnings.warn("Use of None in or_", NoneClauseWarning)
                     clauses = [clause for clause in clauses if clause is not None]
@@ -4265,6 +4265,7 @@ def _bool_expression_literal_as_text(element):
                 logging.log(level, "Use of None in expression")
         return TextClause("")
     return _expression_literal_as_text(element)
+
 
 def _expression_literal_as_text(element):
     return _literal_as_text(element, warn=True)
