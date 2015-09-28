@@ -28,7 +28,7 @@ import logging
 import warnings
 
 # This can be set to 'log:LEVEL' to log, 'warning' to warn, or 'error' to raise an Exception; anything else will ignore
-NONE_CLAUSE_HANDLING = 'warning'
+NONE_CLAUSE_HANDLING = 'log:WARN'
 
 
 class NoneClauseWarning(RuntimeWarning):
