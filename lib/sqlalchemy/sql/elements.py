@@ -1933,6 +1933,7 @@ class BooleanClauseList(ClauseList, ColumnElement):
                 else:
                     level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
                     logging.log(level, "Use of None in and_: %r", clauses)
+                    clauses = [clause for clause in clauses if clause is not None]
         return cls._construct(operators.and_, True_, False_, *clauses)
 
     @classmethod
@@ -1977,6 +1978,7 @@ class BooleanClauseList(ClauseList, ColumnElement):
                 else:
                     level = getattr(logging, NONE_CLAUSE_HANDLING.replace("log:", "", 1).upper(), logging.ERROR)
                     logging.log(level, "Use of None in or_: %r", clauses)
+                    clauses = [clause for clause in clauses if clause is not None]
         return cls._construct(operators.or_, False_, True_, *clauses)
 
     @property
