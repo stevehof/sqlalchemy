@@ -1079,6 +1079,14 @@
         clause for the query.
 
 .. changelog::
+    :version: 1.0.6+j5.1
+    :released: June 25, 2015
+        :tags: bug
+
+        Added backwards compatibility modification for Nones in boolean clauses.
+        See [the merge request](https://github.com/j5int/sqlalchemy/pull/1/) for details.
+
+    .. change::
     :version: 1.0.6
     :released: June 25, 2015
 
