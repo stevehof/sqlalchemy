@@ -1,5 +1,5 @@
 # util/langhelpers.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -59,6 +59,13 @@ class safe_reraise(object):
             self._exc_info = None   # remove potential circular references
             compat.reraise(exc_type, exc_value, exc_tb)
         else:
+            if not compat.py3k and self._exc_info and self._exc_info[1]:
+                # emulate Py3K's behavior of telling us when an exception
+                # occurs in an exception handler.
+                warn(
+                    "An exception has occurred during handling of a "
+                    "previous exception.  The previous exception "
+                    "is:\n %s %s\n" % (self._exc_info[0], self._exc_info[1]))
             self._exc_info = None   # remove potential circular references
             compat.reraise(type_, value, traceback)
 
@@ -214,7 +221,7 @@ class PluginLoader(object):
 
 
 def get_cls_kwargs(cls, _set=None):
-    """Return the full set of inherited kwargs for the given `cls`.
+    r"""Return the full set of inherited kwargs for the given `cls`.
 
     Probes a class's __init__ method, collecting all named arguments.  If the
     __init__ defines a \**kwargs catch-all, then the constructor is presumed
@@ -426,7 +433,7 @@ def getargspec_init(method):
 
     """
     try:
-        return inspect.getargspec(method)
+        return compat.inspect_getargspec(method)
     except TypeError:
         if method is object.__init__:
             return (['self'], None, None, None)
@@ -464,7 +471,7 @@ def generic_repr(obj, additional_kw=(), to_inspect=None, omit_kwarg=()):
     for i, insp in enumerate(to_inspect):
         try:
             (_args, _vargs, vkw, defaults) = \
-                inspect.getargspec(insp.__init__)
+                compat.inspect_getargspec(insp.__init__)
         except TypeError:
             continue
         else:
@@ -625,7 +632,7 @@ def monkeypatch_proxied_specials(into_cls, from_cls, skip=None, only=None,
         except AttributeError:
             continue
         try:
-            spec = inspect.getargspec(fn)
+            spec = compat.inspect_getargspec(fn)
             fn_args = inspect.formatargspec(spec[0])
             d_args = inspect.formatargspec(spec[0][1:])
         except TypeError:
@@ -804,6 +811,8 @@ class MemoizedSlots(object):
     memoized_instancemethod to be available to a class using __slots__.
 
     """
+
+    __slots__ = ()
 
     def _fallback_getattr(self, key):
         raise AttributeError(key)
@@ -997,7 +1006,7 @@ def asint(value):
 
 
 def coerce_kw_type(kw, key, type_, flexi_bool=True):
-    """If 'key' is present in dict 'kw', coerce its value to type 'type\_' if
+    r"""If 'key' is present in dict 'kw', coerce its value to type 'type\_' if
     necessary.  If 'flexi_bool' is True, the string '0' is considered false
     when coercing to boolean.
     """
@@ -1361,7 +1370,7 @@ class EnsureKWArgType(type):
                 m = re.match(fn_reg, key)
                 if m:
                     fn = clsdict[key]
-                    spec = inspect.getargspec(fn)
+                    spec = compat.inspect_getargspec(fn)
                     if not spec.keywords:
                         clsdict[key] = wrapped = cls._wrap_w_kw(fn)
                         setattr(cls, key, wrapped)

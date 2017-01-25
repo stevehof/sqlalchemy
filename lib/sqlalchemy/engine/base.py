@@ -1,5 +1,5 @@
 # engine/base.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -147,7 +147,7 @@ class Connection(Connectable):
         self.close()
 
     def execution_options(self, **opt):
-        """ Set non-SQL options for the connection which take effect
+        r""" Set non-SQL options for the connection which take effect
         during execution.
 
         The method returns a copy of this :class:`.Connection` which references
@@ -157,7 +157,7 @@ class Connection(Connectable):
         underlying resource, it's usually a good idea to ensure that the copies
         will be discarded immediately, which is implicit if used as in::
 
-            result = connection.execution_options(stream_results=True).\\
+            result = connection.execution_options(stream_results=True).\
                                 execute(stmt)
 
         Note that any key/value can be passed to
@@ -844,7 +844,7 @@ class Connection(Connectable):
         return self.execute(object, *multiparams, **params).scalar()
 
     def execute(self, object, *multiparams, **params):
-        """Executes the a SQL statement construct and returns a
+        r"""Executes a SQL statement construct and returns a
         :class:`.ResultProxy`.
 
         :param object: The statement to be executed.  May be
@@ -1155,7 +1155,7 @@ class Connection(Connectable):
         if context.compiled:
             context.post_exec()
 
-        if context.is_crud:
+        if context.is_crud or context.is_text:
             result = context._setup_crud_result_proxy()
         else:
             result = context.get_result_proxy()
@@ -1411,7 +1411,7 @@ class Connection(Connectable):
         return self.engine.dialect.get_default_schema_name(self)
 
     def transaction(self, callable_, *args, **kwargs):
-        """Execute the given function within a transaction boundary.
+        r"""Execute the given function within a transaction boundary.
 
         The function is passed this :class:`.Connection`
         as the first argument, followed by the given \*args and \**kwargs,
@@ -1462,7 +1462,7 @@ class Connection(Connectable):
                 trans.rollback()
 
     def run_callable(self, callable_, *args, **kwargs):
-        """Given a callable object or function, execute it, passing
+        r"""Given a callable object or function, execute it, passing
         a :class:`.Connection` as the first argument.
 
         The given \*args and \**kwargs are passed subsequent
@@ -1531,8 +1531,12 @@ class Transaction(object):
 
     def __init__(self, connection, parent):
         self.connection = connection
-        self._parent = parent or self
+        self._actual_parent = parent
         self.is_active = True
+
+    @property
+    def _parent(self):
+        return self._actual_parent or self
 
     def close(self):
         """Close this :class:`.Transaction`.
@@ -1701,7 +1705,7 @@ class Engine(Connectable, log.Identified):
             self.update_execution_options(**execution_options)
 
     def update_execution_options(self, **opt):
-        """Update the default execution_options dictionary
+        r"""Update the default execution_options dictionary
         of this :class:`.Engine`.
 
         The given keys/values in \**opt are added to the
@@ -1910,7 +1914,7 @@ class Engine(Connectable, log.Identified):
         return Engine._trans_ctx(conn, trans, close_with_result)
 
     def transaction(self, callable_, *args, **kwargs):
-        """Execute the given function within a transaction boundary.
+        r"""Execute the given function within a transaction boundary.
 
         The function is passed a :class:`.Connection` newly procured
         from :meth:`.Engine.contextual_connect` as the first argument,
@@ -1952,7 +1956,7 @@ class Engine(Connectable, log.Identified):
             return conn.transaction(callable_, *args, **kwargs)
 
     def run_callable(self, callable_, *args, **kwargs):
-        """Given a callable object or function, execute it, passing
+        r"""Given a callable object or function, execute it, passing
         a :class:`.Connection` as the first argument.
 
         The given \*args and \**kwargs are passed subsequent

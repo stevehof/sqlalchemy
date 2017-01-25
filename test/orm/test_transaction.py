@@ -490,9 +490,9 @@ class SessionTransactionTest(FixtureTest):
         trans2.rollback()
         assert_raises_message(
             sa_exc.InvalidRequestError,
-            "This Session's transaction has been rolled back by a nested "
-            "rollback\(\) call.  To begin a new transaction, issue "
-            "Session.rollback\(\) first.",
+            r"This Session's transaction has been rolled back by a nested "
+            r"rollback\(\) call.  To begin a new transaction, issue "
+            r"Session.rollback\(\) first.",
             trans.commit
         )
 
@@ -506,10 +506,10 @@ class SessionTransactionTest(FixtureTest):
             trans2.rollback(_capture_exception=True)
         assert_raises_message(
             sa_exc.InvalidRequestError,
-            "This Session's transaction has been rolled back due to a "
-            "previous exception during flush. To begin a new transaction "
-            "with this Session, first issue Session.rollback\(\). "
-            "Original exception was: test",
+            r"This Session's transaction has been rolled back due to a "
+            r"previous exception during flush. To begin a new transaction "
+            r"with this Session, first issue Session.rollback\(\). "
+            r"Original exception was: test",
             trans.commit
         )
 
@@ -656,6 +656,34 @@ class SessionTransactionTest(FixtureTest):
         session.transaction.commit()
         assert session.transaction is not None, \
             'autocommit=False should start a new transaction'
+
+    @testing.requires.python2
+    @testing.requires.savepoints_w_release
+    def test_report_primary_error_when_rollback_fails(self):
+        User, users = self.classes.User, self.tables.users
+
+        mapper(User, users)
+
+        session = Session(testing.db)
+
+        with expect_warnings(".*during handling of a previous exception.*"):
+            session.begin_nested()
+            savepoint = session.\
+                connection()._Connection__transaction._savepoint
+
+            # force the savepoint to disappear
+            session.connection().dialect.do_release_savepoint(
+                session.connection(), savepoint
+            )
+
+            # now do a broken flush
+            session.add_all([User(id=1), User(id=1)])
+
+            assert_raises_message(
+                sa_exc.DBAPIError,
+                "ROLLBACK TO SAVEPOINT ",
+                session.flush
+            )
 
 
 class _LocalFixture(FixtureTest):

@@ -1,5 +1,5 @@
 # sql/util.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -173,6 +173,16 @@ def unwrap_order_by(clause):
     return cols
 
 
+def unwrap_label_reference(element):
+    def replace(elem):
+        if isinstance(elem, (_label_reference, _textual_label_reference)):
+            return elem.element
+
+    return visitors.replacement_traverse(
+        element, {}, replace
+    )
+
+
 def clause_is_present(clause, search):
     """Given a target clause and a second to search within, return True
     if the target is plainly present in the search without any
@@ -312,7 +322,7 @@ def splice_joins(left, right, stop_on=None):
 
 
 def reduce_columns(columns, *clauses, **kw):
-    """given a list of columns, return a 'reduced' set based on natural
+    r"""given a list of columns, return a 'reduced' set based on natural
     equivalents.
 
     the set is reduced to the smallest list of columns which have no natural
@@ -431,7 +441,6 @@ def criterion_as_pairs(expression, consider_as_foreign_keys=None,
     pairs = []
     visitors.traverse(expression, {}, {'binary': visit_binary})
     return pairs
-
 
 
 class ClauseAdapter(visitors.ReplacingCloningVisitor):

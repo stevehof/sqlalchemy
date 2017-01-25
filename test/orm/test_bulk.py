@@ -2,7 +2,7 @@ from sqlalchemy import testing
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing.schema import Table, Column
 from sqlalchemy.testing import fixtures
-from sqlalchemy import Integer, String, ForeignKey
+from sqlalchemy import Integer, String, ForeignKey, FetchedValue
 from sqlalchemy.orm import mapper, Session
 from sqlalchemy.testing.assertsql import CompiledSQL
 from test.orm import _fixtures
@@ -11,6 +11,57 @@ from test.orm import _fixtures
 class BulkTest(testing.AssertsExecutionResults):
     run_inserts = None
     run_define_tables = 'each'
+
+
+class BulkInsertUpdateVersionId(BulkTest, fixtures.MappedTest):
+    @classmethod
+    def define_tables(cls, metadata):
+        Table('version_table', metadata,
+              Column('id', Integer, primary_key=True,
+                     test_needs_autoincrement=True),
+              Column('version_id', Integer, nullable=False),
+              Column('value', String(40), nullable=False))
+
+    @classmethod
+    def setup_classes(cls):
+        class Foo(cls.Comparable):
+            pass
+
+    @classmethod
+    def setup_mappers(cls):
+        Foo, version_table = cls.classes.Foo, cls.tables.version_table
+
+        mapper(Foo, version_table, version_id_col=version_table.c.version_id)
+
+    def test_bulk_insert_via_save(self):
+        Foo = self.classes.Foo
+
+        s = Session()
+
+        s.bulk_save_objects([Foo(value='value')])
+
+        eq_(
+            s.query(Foo).all(),
+            [Foo(version_id=1, value='value')]
+        )
+
+    def test_bulk_update_via_save(self):
+        Foo = self.classes.Foo
+
+        s = Session()
+
+        s.add(Foo(value='value'))
+        s.commit()
+
+        f1 = s.query(Foo).first()
+        f1.value = 'new value'
+        s.bulk_save_objects([f1])
+        s.expunge_all()
+
+        eq_(
+            s.query(Foo).all(),
+            [Foo(version_id=2, value='new value')]
+        )
 
 
 class BulkInsertUpdateTest(BulkTest, _fixtures.FixtureTest):
@@ -153,6 +204,161 @@ class BulkInsertUpdateTest(BulkTest, _fixtures.FixtureTest):
                  {'id': 2, 'name': 'u2'},
                  {'id': 3, 'name': 'u3new'}]
             )
+        )
+
+
+class BulkUDPostfetchTest(BulkTest, fixtures.MappedTest):
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            'a', metadata,
+            Column(
+                'id', Integer,
+                primary_key=True,
+                test_needs_autoincrement=True),
+            Column('x', Integer),
+            Column('y', Integer, server_default=FetchedValue(), server_onupdate=FetchedValue()))
+
+    @classmethod
+    def setup_classes(cls):
+        class A(cls.Comparable):
+            pass
+
+    @classmethod
+    def setup_mappers(cls):
+        A = cls.classes.A
+        a = cls.tables.a
+
+        mapper(A, a)
+
+
+    def test_insert_w_fetch(self):
+        A = self.classes.A
+
+        s = Session()
+        a1 = A(x=1)
+        s.bulk_save_objects([a1])
+        s.commit()
+
+    def test_update_w_fetch(self):
+        A = self.classes.A
+
+        s = Session()
+        a1 = A(x=1, y=2)
+        s.add(a1)
+        s.commit()
+
+        eq_(a1.id, 1)  # force a load
+        a1.x = 5
+        s.expire(a1, ['y'])
+        assert 'y' not in a1.__dict__
+        s.bulk_save_objects([a1])
+        s.commit()
+
+        eq_(a1.x, 5)
+        eq_(a1.y, 2)
+
+
+class BulkUDTestAltColKeys(BulkTest, fixtures.MappedTest):
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            'people_keys', metadata,
+            Column(
+                'person_id', Integer,
+                primary_key=True, key='id'),
+            Column('name', String(50), key='personname'))
+
+        Table(
+            'people_attrs', metadata,
+            Column(
+                'person_id', Integer,
+                primary_key=True),
+            Column('name', String(50)))
+
+        Table(
+            'people_both', metadata,
+            Column(
+                'person_id', Integer,
+                primary_key=True, key="id_key"),
+            Column('name', String(50), key='name_key'))
+
+    @classmethod
+    def setup_classes(cls):
+        class PersonKeys(cls.Comparable):
+            pass
+
+        class PersonAttrs(cls.Comparable):
+            pass
+
+        class PersonBoth(cls.Comparable):
+            pass
+
+    @classmethod
+    def setup_mappers(cls):
+        PersonKeys, PersonAttrs, PersonBoth = cls.classes(
+            "PersonKeys", "PersonAttrs", "PersonBoth")
+        people_keys, people_attrs, people_both = cls.tables(
+            "people_keys", "people_attrs", "people_both")
+
+        mapper(PersonKeys, people_keys)
+        mapper(PersonAttrs, people_attrs, properties={
+            'id': people_attrs.c.person_id,
+            'personname': people_attrs.c.name
+        })
+
+        mapper(PersonBoth, people_both, properties={
+            'id': people_both.c.id_key,
+            'personname': people_both.c.name_key
+        })
+
+    def test_insert_keys(self):
+        self._test_insert(self.classes.PersonKeys)
+
+    def test_insert_attrs(self):
+        self._test_insert(self.classes.PersonAttrs)
+
+    def test_insert_both(self):
+        self._test_insert(self.classes.PersonBoth)
+
+    def test_update_keys(self):
+        self._test_update(self.classes.PersonKeys)
+
+    def test_update_attrs(self):
+        self._test_update(self.classes.PersonAttrs)
+
+    def test_update_both(self):
+        # want to make sure that before [ticket:3849], this did not have
+        # a successful behavior or workaround
+        self._test_update(self.classes.PersonBoth)
+
+    def _test_insert(self, person_cls):
+        Person = person_cls
+
+        s = Session()
+        s.bulk_insert_mappings(
+            Person, [{"id": 5, "personname": "thename"}]
+        )
+
+        eq_(
+            s.query(Person).first(),
+            Person(id=5, personname="thename")
+        )
+
+    def _test_update(self, person_cls):
+        Person = person_cls
+
+        s = Session()
+        s.add(Person(id=5, personname="thename"))
+        s.commit()
+
+        s.bulk_update_mappings(
+            Person, [{"id": 5, "personname": "newname"}]
+        )
+
+        eq_(
+            s.query(Person).first(),
+            Person(id=5, personname="newname")
         )
 
 

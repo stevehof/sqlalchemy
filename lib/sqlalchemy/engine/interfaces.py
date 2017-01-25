@@ -1,5 +1,5 @@
 # engine/interfaces.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -252,7 +252,9 @@ class Dialect(object):
 
         sequence
           a dictionary of the form
-              {'name' : str, 'start' :int, 'increment': int}
+              {'name' : str, 'start' :int, 'increment': int, 'minvalue': int,
+               'maxvalue': int, 'nominvalue': bool, 'nomaxvalue': bool,
+               'cycle': bool}
 
         Additional column attributes may be present.
         """
@@ -376,7 +378,7 @@ class Dialect(object):
 
     def get_unique_constraints(
             self, connection, table_name, schema=None, **kw):
-        """Return information about unique constraints in `table_name`.
+        r"""Return information about unique constraints in `table_name`.
 
         Given a string `table_name` and an optional string `schema`, return
         unique constraint information as a list of dicts with these keys:

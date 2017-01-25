@@ -14,9 +14,9 @@ Event Registration
 ------------------
 
 Subscribing to an event occurs through a single API point, the :func:`.listen` function,
-or alternatively the :func:`.listens_for` decorator.   These functions
-accept a user-defined listening function, a string identifier which identifies the event to be
-intercepted, and a target.  Additional positional and keyword arguments to these
+or alternatively the :func:`.listens_for` decorator.   These functions accept a
+target, a string identifier which identifies the event to be intercepted, and
+a user-defined listening function.  Additional positional and keyword arguments to these
 two functions may be supported by
 specific types of events, which may specify alternate interfaces for the given event function, or provide
 instructions regarding secondary event targets based on the given target.
@@ -30,7 +30,7 @@ and that a user-defined listener function should receive two positional argument
     from sqlalchemy.pool import Pool
 
     def my_on_connect(dbapi_con, connection_record):
-        print "New DBAPI connection:", dbapi_con
+        print("New DBAPI connection:", dbapi_con)
 
     listen(Pool, 'connect', my_on_connect)
 
@@ -41,7 +41,7 @@ To listen with the :func:`.listens_for` decorator looks like::
 
     @listens_for(Pool, "connect")
     def my_on_connect(dbapi_con, connection_record):
-        print "New DBAPI connection:", dbapi_con
+        print("New DBAPI connection:", dbapi_con)
 
 Named Argument Styles
 ---------------------

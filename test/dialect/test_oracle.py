@@ -5,6 +5,7 @@ from sqlalchemy.testing import eq_
 from sqlalchemy import *
 from sqlalchemy import types as sqltypes, exc, schema
 from sqlalchemy.sql import table, column
+from sqlalchemy.sql.elements import quoted_name
 from sqlalchemy.testing import fixtures, AssertsExecutionResults, AssertsCompiledSQL
 from sqlalchemy import testing
 from sqlalchemy.util import u, b
@@ -22,6 +23,7 @@ from sqlalchemy.testing.mock import Mock
 
 class OutParamTest(fixtures.TestBase, AssertsExecutionResults):
     __only_on__ = 'oracle+cx_oracle'
+    __backend__ = True
 
     @classmethod
     def setup_class(cls):
@@ -54,6 +56,7 @@ class OutParamTest(fixtures.TestBase, AssertsExecutionResults):
 
 class CXOracleArgsTest(fixtures.TestBase):
     __only_on__ = 'oracle+cx_oracle'
+    __backend__ = True
 
     def test_autosetinputsizes(self):
         dialect = cx_oracle.dialect()
@@ -75,6 +78,7 @@ class CXOracleArgsTest(fixtures.TestBase):
 class QuotedBindRoundTripTest(fixtures.TestBase):
 
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @testing.provide_metadata
     def test_table_round_trip(self):
@@ -338,6 +342,79 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "FROM mytable mytable_1 "
             "WHERE mytable_1.myid = :myid_1 FOR UPDATE OF "
             "mytable_1.myid, mytable_1.name"
+        )
+
+    def test_for_update_of_w_limit_adaption_col_present(self):
+        table1 = table('mytable', column('myid'), column('name'))
+
+        self.assert_compile(
+            select([table1.c.myid, table1.c.name]).
+            where(table1.c.myid == 7).
+            with_for_update(nowait=True, of=table1.c.name).
+            limit(10),
+            "SELECT myid, name FROM "
+            "(SELECT mytable.myid AS myid, mytable.name AS name "
+            "FROM mytable WHERE mytable.myid = :myid_1) "
+            "WHERE ROWNUM <= :param_1 FOR UPDATE OF name NOWAIT",
+        )
+
+    def test_for_update_of_w_limit_adaption_col_unpresent(self):
+        table1 = table('mytable', column('myid'), column('name'))
+
+        self.assert_compile(
+            select([table1.c.myid]).
+            where(table1.c.myid == 7).
+            with_for_update(nowait=True, of=table1.c.name).
+            limit(10),
+            "SELECT myid FROM "
+            "(SELECT mytable.myid AS myid, mytable.name AS name "
+            "FROM mytable WHERE mytable.myid = :myid_1) "
+            "WHERE ROWNUM <= :param_1 FOR UPDATE OF name NOWAIT",
+        )
+
+    def test_for_update_of_w_limit_offset_adaption_col_present(self):
+        table1 = table('mytable', column('myid'), column('name'))
+
+        self.assert_compile(
+            select([table1.c.myid, table1.c.name]).
+            where(table1.c.myid == 7).
+            with_for_update(nowait=True, of=table1.c.name).
+            limit(10).offset(50),
+            "SELECT myid, name FROM (SELECT myid, name, ROWNUM AS ora_rn "
+            "FROM (SELECT mytable.myid AS myid, mytable.name AS name "
+            "FROM mytable WHERE mytable.myid = :myid_1) "
+            "WHERE ROWNUM <= :param_1 + :param_2) WHERE ora_rn > :param_2 "
+            "FOR UPDATE OF name NOWAIT",
+        )
+
+    def test_for_update_of_w_limit_offset_adaption_col_unpresent(self):
+        table1 = table('mytable', column('myid'), column('name'))
+
+        self.assert_compile(
+            select([table1.c.myid]).
+            where(table1.c.myid == 7).
+            with_for_update(nowait=True, of=table1.c.name).
+            limit(10).offset(50),
+            "SELECT myid FROM (SELECT myid, ROWNUM AS ora_rn, name "
+            "FROM (SELECT mytable.myid AS myid, mytable.name AS name "
+            "FROM mytable WHERE mytable.myid = :myid_1) "
+            "WHERE ROWNUM <= :param_1 + :param_2) WHERE ora_rn > :param_2 "
+            "FOR UPDATE OF name NOWAIT",
+        )
+
+    def test_for_update_of_w_limit_offset_adaption_partial_col_unpresent(self):
+        table1 = table('mytable', column('myid'), column('foo'), column('bar'))
+
+        self.assert_compile(
+            select([table1.c.myid, table1.c.bar]).
+            where(table1.c.myid == 7).
+            with_for_update(nowait=True, of=[table1.c.foo, table1.c.bar]).
+            limit(10).offset(50),
+            "SELECT myid, bar FROM (SELECT myid, bar, ROWNUM AS ora_rn, "
+            "foo FROM (SELECT mytable.myid AS myid, mytable.bar AS bar, "
+            "mytable.foo AS foo FROM mytable WHERE mytable.myid = :myid_1) "
+            "WHERE ROWNUM <= :param_1 + :param_2) WHERE ora_rn > :param_2 "
+            "FOR UPDATE OF foo, bar NOWAIT"
         )
 
     def test_limit_preserves_typing_information(self):
@@ -833,6 +910,7 @@ class CompatFlagsTest(fixtures.TestBase, AssertsCompiledSQL):
 
 class MultiSchemaTest(fixtures.TestBase, AssertsCompiledSQL):
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @classmethod
     def setup_class(cls):
@@ -860,7 +938,7 @@ create table local_table(
 create synonym %(test_schema)s.ptable for %(test_schema)s.parent;
 create synonym %(test_schema)s.ctable for %(test_schema)s.child;
 
-create synonym %(test_schema)s_ptable for %(test_schema)s.parent;
+create synonym %(test_schema)s_pt for %(test_schema)s.parent;
 
 create synonym %(test_schema)s.local_table for local_table;
 
@@ -882,7 +960,7 @@ drop table %(test_schema)s.parent;
 drop table local_table;
 drop synonym %(test_schema)s.ctable;
 drop synonym %(test_schema)s.ptable;
-drop synonym %(test_schema)s_ptable;
+drop synonym %(test_schema)s_pt;
 drop synonym %(test_schema)s.local_table;
 
 """ % {"test_schema": testing.config.test_schema}).split(";"):
@@ -909,11 +987,12 @@ drop synonym %(test_schema)s.local_table;
 
     def test_reflect_alt_table_owner_local_synonym(self):
         meta = MetaData(testing.db)
-        parent = Table('test_schema_ptable', meta, autoload=True,
+        parent = Table('%s_pt' % testing.config.test_schema, meta, autoload=True,
                             oracle_resolve_synonyms=True)
         self.assert_compile(parent.select(),
-                "SELECT test_schema_ptable.id, "
-                "test_schema_ptable.data FROM test_schema_ptable")
+                "SELECT %(test_schema)s_pt.id, "
+                "%(test_schema)s_pt.data FROM %(test_schema)s_pt" 
+                 % {"test_schema": testing.config.test_schema})
         select([parent]).execute().fetchall()
 
     def test_reflect_alt_synonym_owner_local_table(self):
@@ -1044,6 +1123,7 @@ drop synonym %(test_schema)s.local_table;
 class ConstraintTest(fixtures.TablesTest):
 
     __only_on__ = 'oracle'
+    __backend__ = True
     run_deletes = None
 
     @classmethod
@@ -1070,6 +1150,7 @@ class TwoPhaseTest(fixtures.TablesTest):
     so requires a carefully written test."""
 
     __only_on__ = 'oracle+cx_oracle'
+    __backend__ = True
 
     @classmethod
     def define_tables(cls, metadata):
@@ -1234,6 +1315,7 @@ class DialectTypesTest(fixtures.TestBase, AssertsCompiledSQL):
 class TypesTest(fixtures.TestBase):
     __only_on__ = 'oracle'
     __dialect__ = oracle.OracleDialect()
+    __backend__ = True
 
 
     @testing.fails_on('+zxjdbc', 'zxjdbc lacks the FIXED_CHAR dbapi type')
@@ -1691,6 +1773,7 @@ class EuroNumericTest(fixtures.TestBase):
     """test the numeric output_type_handler when using non-US locale for NLS_LANG."""
 
     __only_on__ = 'oracle+cx_oracle'
+    __backend__ = True
 
     def setup(self):
         self.old_nls_lang = os.environ.get('NLS_LANG', False)
@@ -1728,6 +1811,7 @@ class DontReflectIOTTest(fixtures.TestBase):
     table_names."""
 
     __only_on__ = 'oracle'
+    __backend__ = True
 
     def setup(self):
         testing.db.execute("""
@@ -1756,6 +1840,7 @@ class DontReflectIOTTest(fixtures.TestBase):
 
 class BufferedColumnTest(fixtures.TestBase, AssertsCompiledSQL):
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @classmethod
     def setup_class(cls):
@@ -1793,6 +1878,7 @@ class BufferedColumnTest(fixtures.TestBase, AssertsCompiledSQL):
 
 class UnsupportedIndexReflectTest(fixtures.TestBase):
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @testing.emits_warning("No column names")
     @testing.provide_metadata
@@ -1812,6 +1898,9 @@ class UnsupportedIndexReflectTest(fixtures.TestBase):
 def all_tables_compression_missing():
     try:
         testing.db.execute('SELECT compression FROM all_tables')
+        if "Enterprise Edition" not in testing.db.scalar(
+                "select * from v$version"):
+            return True
         return False
     except:
         return True
@@ -1820,6 +1909,9 @@ def all_tables_compression_missing():
 def all_tables_compress_for_missing():
     try:
         testing.db.execute('SELECT compress_for FROM all_tables')
+        if "Enterprise Edition" not in testing.db.scalar(
+                "select * from v$version"):
+            return True
         return False
     except:
         return True
@@ -1827,6 +1919,7 @@ def all_tables_compress_for_missing():
 
 class TableReflectionTest(fixtures.TestBase):
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @testing.provide_metadata
     @testing.fails_if(all_tables_compression_missing)
@@ -1859,9 +1952,35 @@ class TableReflectionTest(fixtures.TestBase):
         tbl = Table('test_compress', m2, autoload=True)
         assert tbl.dialect_options['oracle']['compress'] == "OLTP"
 
+    @testing.provide_metadata
+    def test_reflect_lowercase_forced_tables(self):
+        metadata = self.metadata
+
+        Table(
+            quoted_name('t1', quote=True), metadata,
+            Column('id', Integer, primary_key=True),
+        )
+        Table(
+            quoted_name('t2', quote=True), metadata,
+            Column('id', Integer, primary_key=True),
+            Column('t1id', ForeignKey('t1.id'))
+        )
+        metadata.create_all()
+
+        m2 = MetaData(testing.db)
+        t2_ref = Table(quoted_name('t2', quote=True), m2, autoload=True)
+        t1_ref = m2.tables['t1']
+        assert t2_ref.c.t1id.references(t1_ref.c.id)
+
+        m3 = MetaData(testing.db)
+        m3.reflect(only=lambda name, m: name.lower() in ('t1', 't2'))
+        assert m3.tables['t2'].c.t1id.references(m3.tables['t1'].c.id)
+
+
 
 class RoundTripIndexTest(fixtures.TestBase):
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @testing.provide_metadata
     def test_basic(self):
@@ -1957,6 +2076,7 @@ class SequenceTest(fixtures.TestBase, AssertsCompiledSQL):
 class ExecuteTest(fixtures.TestBase):
 
     __only_on__ = 'oracle'
+    __backend__ = True
 
     def test_basic(self):
         eq_(testing.db.execute('/*+ this is a comment */ SELECT 1 FROM '
@@ -2009,6 +2129,7 @@ class ExecuteTest(fixtures.TestBase):
 
 class UnicodeSchemaTest(fixtures.TestBase):
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @testing.provide_metadata
     def test_quoted_column_non_unicode(self):
@@ -2046,12 +2167,16 @@ class UnicodeSchemaTest(fixtures.TestBase):
 class DBLinkReflectionTest(fixtures.TestBase):
     __requires__ = 'oracle_test_dblink',
     __only_on__ = 'oracle'
+    __backend__ = True
 
     @classmethod
     def setup_class(cls):
         from sqlalchemy.testing import config
         cls.dblink = config.file_config.get('sqla_testing', 'oracle_db_link')
 
+        # note that the synonym here is still not totally functional
+        # when accessing via a different username as we do with the multiprocess
+        # test suite, so testing here is minimal
         with testing.db.connect() as conn:
             conn.execute(
                 "create table test_table "
@@ -2065,15 +2190,6 @@ class DBLinkReflectionTest(fixtures.TestBase):
             conn.execute("drop synonym test_table_syn")
             conn.execute("drop table test_table")
 
-    def test_hello_world(self):
-        """test that the synonym/dblink is functional."""
-        testing.db.execute("insert into test_table_syn (id, data) "
-                            "values (1, 'some data')")
-        eq_(
-            testing.db.execute("select * from test_table_syn").first(),
-            (1, 'some data')
-        )
-
     def test_reflection(self):
         """test the resolution of the synonym/dblink. """
         m = MetaData()
@@ -2086,6 +2202,7 @@ class DBLinkReflectionTest(fixtures.TestBase):
 
 class ServiceNameTest(fixtures.TestBase):
     __only_on__ = 'oracle+cx_oracle'
+    __backend__ = True
 
     def test_cx_oracle_service_name(self):
         url_string = 'oracle+cx_oracle://scott:tiger@host/?service_name=hr'

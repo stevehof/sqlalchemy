@@ -1,4 +1,4 @@
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -88,6 +88,7 @@ class Load(Generative, MapperOption):
         cloned.local_opts = {}
         return cloned
 
+    _merge_into_path = False
     strategy = None
     propagate_to_loaders = False
 
@@ -180,7 +181,7 @@ class Load(Generative, MapperOption):
         return path
 
     def __str__(self):
-        return "Load(strategy=%r)" % self.strategy
+        return "Load(strategy=%r)" % (self.strategy, )
 
     def _coerce_strat(self, strategy):
         if strategy is not None:
@@ -214,7 +215,15 @@ class Load(Generative, MapperOption):
             cloned._set_path_strategy()
 
     def _set_path_strategy(self):
-        if self.path.has_entity:
+        if self._merge_into_path:
+            # special helper for undefer_group
+            existing = self.path.get(self.context, "loader")
+            if existing:
+                existing.local_opts.update(self.local_opts)
+            else:
+                self.path.set(self.context, "loader", self)
+
+        elif self.path.has_entity:
             self.path.parent.set(self.context, "loader", self)
         else:
             self.path.set(self.context, "loader", self)
@@ -411,11 +420,20 @@ class _UnboundLoad(Load):
 
         if effective_path.is_token:
             for path in effective_path.generate_for_superclasses():
-                if self._is_chain_link:
+                if self._merge_into_path:
+                    # special helper for undefer_group
+                    existing = path.get(context, "loader")
+                    if existing:
+                        existing.local_opts.update(self.local_opts)
+                    else:
+                        path.set(context, "loader", loader)
+                elif self._is_chain_link:
                     path.setdefault(context, "loader", loader)
                 else:
                     path.set(context, "loader", loader)
         else:
+            # only supported for the undefer_group() wildcard opt
+            assert not self._merge_into_path
             if self._is_chain_link:
                 effective_path.setdefault(context, "loader", loader)
             else:
@@ -519,7 +537,7 @@ See :func:`.orm.%(name)s` for usage examples.
 
 @loader_option()
 def contains_eager(loadopt, attr, alias=None):
-    """Indicate that the given attribute should be eagerly loaded from
+    r"""Indicate that the given attribute should be eagerly loaded from
     columns stated manually in the query.
 
     This function is part of the :class:`.Load` interface and supports
@@ -528,8 +546,8 @@ def contains_eager(loadopt, attr, alias=None):
     The option is used in conjunction with an explicit join that loads
     the desired rows, i.e.::
 
-        sess.query(Order).\\
-                join(Order.user).\\
+        sess.query(Order).\
+                join(Order.user).\
                 options(contains_eager(Order.user))
 
     The above query would join from the ``Order`` entity to its related
@@ -542,8 +560,8 @@ def contains_eager(loadopt, attr, alias=None):
     the eagerly-loaded rows are to come from an aliased table::
 
         user_alias = aliased(User)
-        sess.query(Order).\\
-                join((user_alias, Order.user)).\\
+        sess.query(Order).\
+                join((user_alias, Order.user)).\
                 options(contains_eager(Order.user, alias=user_alias))
 
     .. seealso::
@@ -590,7 +608,7 @@ def load_only(loadopt, *attrs):
     ``Address`` object load only the ``email_address`` attribute::
 
         session.query(User).options(
-                subqueryload("addreses").load_only("email_address")
+                subqueryload("addresses").load_only("email_address")
         )
 
     For a :class:`.Query` that has multiple entities, the lead entity can be
@@ -885,7 +903,7 @@ def defaultload(*keys):
 
 @loader_option()
 def defer(loadopt, key):
-    """Indicate that the given column-oriented attribute should be deferred, e.g.
+    r"""Indicate that the given column-oriented attribute should be deferred, e.g.
     not loaded until accessed.
 
     This function is part of the :class:`.Load` interface and supports
@@ -949,7 +967,7 @@ def defer(key, *addl_attrs):
 
 @loader_option()
 def undefer(loadopt, key):
-    """Indicate that the given column-oriented attribute should be undeferred,
+    r"""Indicate that the given column-oriented attribute should be undeferred,
     e.g. specified within the SELECT statement of the entity as a whole.
 
     The column being undeferred is typically set up on the mapping as a
@@ -1025,10 +1043,11 @@ def undefer_group(loadopt, name):
         :func:`.orm.undefer`
 
     """
+    loadopt._merge_into_path = True
     return loadopt.set_column_strategy(
         "*",
         None,
-        {"undefer_group": name}
+        {"undefer_group_%s" % name: True}
     )
 
 

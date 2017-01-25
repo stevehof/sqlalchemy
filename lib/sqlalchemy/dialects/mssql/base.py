@@ -1,5 +1,5 @@
 # mssql/base.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -216,6 +216,25 @@ to either True or False.
    the SQL Server dialect's legacy behavior with schema-qualified table
    names.  This flag will default to False in version 1.1.
 
+MAX on VARCHAR / NVARCHAR
+-------------------------
+
+SQL Server supports the special string "MAX" within the
+:class:`.sqltypes.VARCHAR` and :class:`.sqltypes.NVARCHAR` datatypes,
+to indicate "maximum length possible".   The dialect currently handles this as
+a length of "None" in the base type, rather than supplying a
+dialect-specific version of these types, so that a base type
+specified such as ``VARCHAR(None)`` can assume "unlengthed" behavior on
+more than one backend without using dialect-specific types.
+
+To build a SQL Server VARCHAR or NVARCHAR with MAX length, use None::
+
+    my_table = Table(
+        'my_table', metadata,
+        Column('my_data', VARCHAR(None)),
+        Column('my_n_data', NVARCHAR(None))
+    )
+
 Collation Support
 -----------------
 
@@ -236,7 +255,7 @@ CREATE TABLE statement for this column will yield::
 LIMIT/OFFSET Support
 --------------------
 
-MSSQL has no support for the LIMIT or OFFSET keysowrds. LIMIT is
+MSSQL has no support for the LIMIT or OFFSET keywords. LIMIT is
 supported directly through the ``TOP`` Transact SQL keyword::
 
     select.limit
@@ -264,7 +283,7 @@ render::
     name VARCHAR(20)
 
 If ``nullable`` is ``True`` or ``False`` then the column will be
-``NULL` or ``NOT NULL`` respectively.
+``NULL`` or ``NOT NULL`` respectively.
 
 Date / Time Handling
 --------------------
@@ -433,6 +452,40 @@ Declarative form::
 This option can also be specified engine-wide using the
 ``implicit_returning=False`` argument on :func:`.create_engine`.
 
+.. _mssql_rowcount_versioning:
+
+Rowcount Support / ORM Versioning
+---------------------------------
+
+The SQL Server drivers have very limited ability to return the number
+of rows updated from an UPDATE or DELETE statement.  In particular, the
+pymssql driver has no support, whereas the pyodbc driver can only return
+this value under certain conditions.
+
+In particular, updated rowcount is not available when OUTPUT INSERTED
+is used.  This impacts the SQLAlchemy ORM's versioning feature when
+server-side versioning schemes are used.  When
+using pyodbc, the "implicit_returning" flag needs to be set to false
+for any ORM mapped class that uses a version_id column in conjunction with
+a server-side version generator::
+
+    class MyTable(Base):
+        __tablename__ = 'mytable'
+        id = Column(Integer, primary_key=True)
+        stuff = Column(String(10))
+        timestamp = Column(TIMESTAMP(), default=text('DEFAULT'))
+        __mapper_args__ = {
+            'version_id_col': timestamp,
+            'version_id_generator': False,
+        }
+        __table_args__ = {
+            'implicit_returning': False
+        }
+
+Without the implicit_returning flag above, the UPDATE statement will
+use ``OUTPUT inserted.timestamp`` and the rowcount will be returned as
+-1, causing the versioning logic to fail.
+
 Enabling Snapshot Isolation
 ---------------------------
 
@@ -476,6 +529,8 @@ from ...util import update_wrapper
 from . import information_schema as ischema
 
 # http://sqlserverbuilds.blogspot.com/
+MS_2016_VERSION = (13,)
+MS_2014_VERSION = (12,)
 MS_2012_VERSION = (11,)
 MS_2008_VERSION = (10,)
 MS_2005_VERSION = (9,)
@@ -548,9 +603,13 @@ class _MSDate(sqltypes.Date):
             if isinstance(value, datetime.datetime):
                 return value.date()
             elif isinstance(value, util.string_types):
+                m = self._reg.match(value)
+                if not m:
+                    raise ValueError(
+                        "could not parse %r as a date value" % (value, ))
                 return datetime.date(*[
                     int(x or 0)
-                    for x in self._reg.match(value).groups()
+                    for x in m.groups()
                 ])
             else:
                 return value
@@ -582,9 +641,13 @@ class TIME(sqltypes.TIME):
             if isinstance(value, datetime.datetime):
                 return value.time()
             elif isinstance(value, util.string_types):
+                m = self._reg.match(value)
+                if not m:
+                    raise ValueError(
+                        "could not parse %r as a time value" % (value, ))
                 return datetime.time(*[
                     int(x or 0)
-                    for x in self._reg.match(value).groups()])
+                    for x in m.groups()])
             else:
                 return value
         return process
@@ -774,21 +837,21 @@ class MSTypeCompiler(compiler.GenericTypeCompiler):
         return "TINYINT"
 
     def visit_DATETIMEOFFSET(self, type_, **kw):
-        if type_.precision:
+        if type_.precision is not None:
             return "DATETIMEOFFSET(%s)" % type_.precision
         else:
             return "DATETIMEOFFSET"
 
     def visit_TIME(self, type_, **kw):
         precision = getattr(type_, 'precision', None)
-        if precision:
+        if precision is not None:
             return "TIME(%s)" % precision
         else:
             return "TIME"
 
     def visit_DATETIME2(self, type_, **kw):
         precision = getattr(type_, 'precision', None)
-        if precision:
+        if precision is not None:
             return "DATETIME2(%s)" % precision
         else:
             return "DATETIME2"
@@ -1087,7 +1150,11 @@ class MSSQLCompiler(compiler.SQLCompiler):
                                        'using an OFFSET or a non-simple '
                                        'LIMIT clause')
 
-            _order_by_clauses = select._order_by_clause.clauses
+            _order_by_clauses = [
+                sql_util.unwrap_label_reference(elem)
+                for elem in select._order_by_clause.clauses
+            ]
+
             limit_clause = select._limit_clause
             offset_clause = select._offset_clause
             kwargs['select_wraps_for'] = select
@@ -1173,7 +1240,7 @@ class MSSQLCompiler(compiler.SQLCompiler):
 
     def visit_extract(self, extract, **kw):
         field = self.extract_map.get(extract.field, extract.field)
-        return 'DATEPART("%s", %s)' % \
+        return 'DATEPART(%s, %s)' % \
             (field, self.process(extract.expr, **kw))
 
     def visit_savepoint(self, savepoint_stmt):
@@ -1563,18 +1630,9 @@ class MSDialect(default.DefaultDialect):
 
     def _setup_version_attributes(self):
         if self.server_version_info[0] not in list(range(8, 17)):
-            # FreeTDS with version 4.2 seems to report here
-            # a number like "95.10.255".  Don't know what
-            # that is.  So emit warning.
-            # Use TDS Version 7.0 through 7.3, per the MS information here:
-            # https://msdn.microsoft.com/en-us/library/dd339982.aspx
-            # and FreeTDS information here (7.3 highest supported version):
-            # http://www.freetds.org/userguide/choosingtdsprotocol.htm
             util.warn(
-                "Unrecognized server version info '%s'.   Version specific "
-                "behaviors may not function properly.   If using ODBC "
-                "with FreeTDS, ensure TDS_VERSION 7.0 through 7.3, not "
-                "4.2, is configured in the FreeTDS configuration." %
+                "Unrecognized server version info '%s'.  Some SQL Server "
+                "features may not function properly." %
                 ".".join(str(x) for x in self.server_version_info))
         if self.server_version_info >= MS_2005_VERSION and \
                 'implicit_returning' not in self.__dict__:
@@ -1588,17 +1646,13 @@ class MSDialect(default.DefaultDialect):
     def _get_default_schema_name(self, connection):
         if self.server_version_info < MS_2005_VERSION:
             return self.schema_name
-
-        query = sql.text("""
-            SELECT default_schema_name FROM
-            sys.database_principals
-            WHERE principal_id=database_principal_id()
-        """)
-        default_schema_name = connection.scalar(query)
-        if default_schema_name is not None:
-            return util.text_type(default_schema_name)
         else:
-            return self.schema_name
+            query = sql.text("SELECT schema_name()")
+            default_schema_name = connection.scalar(query)
+            if default_schema_name is not None:
+                return util.text_type(default_schema_name)
+            else:
+                return self.schema_name
 
     @_db_plus_owner
     def has_table(self, connection, tablename, dbname, owner, schema):

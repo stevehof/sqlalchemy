@@ -89,7 +89,8 @@ To get at the :class:`.Mapper` for a particular mapped class, call the
 
     mapper = inspect(MyClass)
 
-From there, all information about the class can be acquired using such methods as:
+From there, all information about the class can be accessed through properties
+such as:
 
 * :attr:`.Mapper.attrs` - a namespace of all mapped attributes.  The attributes
   themselves are instances of :class:`.MapperProperty`, which contain additional
@@ -293,7 +294,7 @@ the two queries may not see the same results:
     ORDER BY anon_1.users_id
 
 Depending on database specifics, there is
-a chance we may get the a result like the following for the two queries::
+a chance we may get a result like the following for the two queries::
 
     -- query #1
     +--------+

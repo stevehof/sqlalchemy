@@ -13,7 +13,7 @@ from sqlalchemy.engine import default
 from sqlalchemy.sql.elements import _literal_as_text
 from sqlalchemy.schema import Column, Table, MetaData
 from sqlalchemy.types import TypeEngine, TypeDecorator, UserDefinedType, \
-    Boolean, NullType, MatchType
+    Boolean, NullType, MatchType, DateTime
 from sqlalchemy.dialects import mysql, firebird, postgresql, oracle, \
     sqlite, mssql
 from sqlalchemy import util
@@ -209,6 +209,18 @@ class DefaultColumnComparatorTest(fixtures.TestBase):
 
     def test_concat(self):
         self._do_operate_test(operators.concat_op)
+
+    def test_contains_override_raises(self):
+        for col in [
+            Column('x', String),
+            Column('x', Integer),
+            Column('x', DateTime)
+        ]:
+            assert_raises_message(
+                NotImplementedError,
+                "Operator 'contains' is not supported on this expression",
+                lambda: 'foo' in col
+            )
 
 
 class CustomUnaryOperatorTest(fixtures.TestBase, testing.AssertsCompiledSQL):
@@ -825,6 +837,64 @@ class ConjunctionTest(fixtures.TestBase, testing.AssertsCompiledSQL):
             "SELECT false AS anon_1, false AS anon_2"
         )
 
+    def test_is_true_literal(self):
+        c = column('x', Boolean)
+        self.assert_compile(
+            c.is_(True),
+            "x IS true"
+        )
+
+    def test_is_false_literal(self):
+        c = column('x', Boolean)
+        self.assert_compile(
+            c.is_(False),
+            "x IS false"
+        )
+
+    def test_and_false_literal_leading(self):
+        self.assert_compile(
+            and_(False, True),
+            "false"
+        )
+
+        self.assert_compile(
+            and_(False, False),
+            "false"
+        )
+
+    def test_and_true_literal_leading(self):
+        self.assert_compile(
+            and_(True, True),
+            "true"
+        )
+
+        self.assert_compile(
+            and_(True, False),
+            "false"
+        )
+
+    def test_or_false_literal_leading(self):
+        self.assert_compile(
+            or_(False, True),
+            "true"
+        )
+
+        self.assert_compile(
+            or_(False, False),
+            "false"
+        )
+
+    def test_or_true_literal_leading(self):
+        self.assert_compile(
+            or_(True, True),
+            "true"
+        )
+
+        self.assert_compile(
+            or_(True, False),
+            "true"
+        )
+
 
 class OperatorPrecedenceTest(fixtures.TestBase, testing.AssertsCompiledSQL):
     __dialect__ = 'default'
@@ -1327,6 +1397,9 @@ class MathOperatorTest(fixtures.TestBase, testing.AssertsCompiledSQL):
         else:
             self._test_math_op(operator.div, '/')
 
+    def test_math_op_mod(self):
+        self._test_math_op(operator.mod, '%')
+
 
 class ComparisonOperatorTest(fixtures.TestBase, testing.AssertsCompiledSQL):
     __dialect__ = 'default'
@@ -1499,6 +1572,12 @@ class NegationTest(fixtures.TestBase, testing.AssertsCompiledSQL):
                 (self.table1.c.myid != 12) & ~self.table1.c.name),
             "SELECT mytable.myid, mytable.name FROM "
             "mytable WHERE mytable.myid != :myid_1 AND NOT mytable.name")
+
+    def test_negate_operator_type(self):
+        is_(
+            (-self.table1.c.myid).type,
+            self.table1.c.myid.type,
+        )
 
 
 class LikeTest(fixtures.TestBase, testing.AssertsCompiledSQL):

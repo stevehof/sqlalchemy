@@ -17,6 +17,7 @@ from sqlalchemy.util import pypy
 from sqlalchemy.testing import fixtures
 from test.orm import _fixtures
 from sqlalchemy import event, ForeignKey
+from sqlalchemy.util.compat import inspect_getargspec
 
 
 class ExecutionTest(_fixtures.FixtureTest):
@@ -1416,7 +1417,7 @@ class SessionInterface(fixtures.TestBase):
         for meth in Session.public_methods:
             if meth in blacklist:
                 continue
-            spec = inspect.getargspec(getattr(Session, meth))
+            spec = inspect_getargspec(getattr(Session, meth))
             if len(spec[0]) > 1 or spec[1]:
                 ok.add(meth)
         return ok
@@ -1636,19 +1637,19 @@ class FlushWarningsTest(fixtures.MappedTest):
         Address = self.classes.Address
         def evt(mapper, conn, instance):
             object_session(instance).add(Address(email='x1'))
-        self._test(evt, "Session.add\(\)")
+        self._test(evt, r"Session.add\(\)")
 
     def test_plain_merge(self):
         Address = self.classes.Address
         def evt(mapper, conn, instance):
             object_session(instance).merge(Address(email='x1'))
-        self._test(evt, "Session.merge\(\)")
+        self._test(evt, r"Session.merge\(\)")
 
     def test_plain_delete(self):
         Address = self.classes.Address
         def evt(mapper, conn, instance):
             object_session(instance).delete(Address(email='x1'))
-        self._test(evt, "Session.delete\(\)")
+        self._test(evt, r"Session.delete\(\)")
 
     def _test(self, fn, method):
         User = self.classes.User

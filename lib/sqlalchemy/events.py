@@ -1,5 +1,5 @@
 # sqlalchemy/events.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -76,7 +76,7 @@ class DDLEvents(event.Events):
     _dispatch_target = SchemaEventTarget
 
     def before_create(self, target, connection, **kw):
-        """Called before CREATE statements are emitted.
+        r"""Called before CREATE statements are emitted.
 
         :param target: the :class:`.MetaData` or :class:`.Table`
          object which is the target of the event.
@@ -92,7 +92,7 @@ class DDLEvents(event.Events):
         """
 
     def after_create(self, target, connection, **kw):
-        """Called after CREATE statements are emitted.
+        r"""Called after CREATE statements are emitted.
 
         :param target: the :class:`.MetaData` or :class:`.Table`
          object which is the target of the event.
@@ -108,7 +108,7 @@ class DDLEvents(event.Events):
         """
 
     def before_drop(self, target, connection, **kw):
-        """Called before DROP statements are emitted.
+        r"""Called before DROP statements are emitted.
 
         :param target: the :class:`.MetaData` or :class:`.Table`
          object which is the target of the event.
@@ -124,7 +124,7 @@ class DDLEvents(event.Events):
         """
 
     def after_drop(self, target, connection, **kw):
-        """Called after DROP statements are emitted.
+        r"""Called after DROP statements are emitted.
 
         :param target: the :class:`.MetaData` or :class:`.Table`
          object which is the target of the event.
@@ -424,7 +424,7 @@ class ConnectionEvents(event.Events):
 
         def before_cursor_execute(conn, cursor, statement, parameters, context,
                                                         executemany):
-            log.info("Received statement: %s" % statement)
+            log.info("Received statement: %s", statement)
 
         engine = create_engine('postgresql://scott:tiger@localhost/test')
         event.listen(engine, "before_cursor_execute", before_cursor_execute)
@@ -435,7 +435,7 @@ class ConnectionEvents(event.Events):
             @event.listens_for(conn, 'before_cursor_execute')
             def before_cursor_execute(conn, cursor, statement, parameters,
                                             context, executemany):
-                log.info("Received statement: %s" % statement)
+                log.info("Received statement: %s", statement)
 
     When the methods are called with a `statement` parameter, such as in
     :meth:`.after_cursor_execute`, :meth:`.before_cursor_execute` and
@@ -677,7 +677,7 @@ class ConnectionEvents(event.Events):
         """
 
     def handle_error(self, exception_context):
-        """Intercept all exceptions processed by the :class:`.Connection`.
+        r"""Intercept all exceptions processed by the :class:`.Connection`.
 
         This includes all exceptions emitted by the DBAPI as well as
         within SQLAlchemy's statement invocation process, including
@@ -720,7 +720,7 @@ class ConnectionEvents(event.Events):
             @event.listens_for(Engine, "handle_error")
             def handle_exception(context):
                 if isinstance(context.original_exception,
-                    psycopg2.OperationalError) and \\
+                    psycopg2.OperationalError) and \
                     "failed" in str(context.original_exception):
                     raise MySpecialException("failed operation")
 
@@ -743,7 +743,7 @@ class ConnectionEvents(event.Events):
 
             @event.listens_for(Engine, "handle_error", retval=True)
             def handle_exception(context):
-                if context.chained_exception is not None and \\
+                if context.chained_exception is not None and \
                     "special" in context.chained_exception.message:
                     return MySpecialException("failed",
                         cause=context.chained_exception)
@@ -818,6 +818,11 @@ class ConnectionEvents(event.Events):
         .. versionadded:: 0.9.0
 
         .. seealso::
+
+            :ref:`pool_disconnects_pessimistic` - illustrates how to use
+            :meth:`.ConnectionEvents.engine_connect`
+            to transparently ensure pooled connections are connected to the
+            database.
 
             :meth:`.PoolEvents.checkout` the lower-level pool checkout event
             for an individual DBAPI connection

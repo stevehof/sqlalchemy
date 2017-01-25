@@ -1,11 +1,11 @@
 # sqlite/base.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
-"""
+r"""
 .. dialect:: sqlite
     :name: SQLite
 
@@ -358,8 +358,14 @@ Dotted Column Names
 Using table or column names that explicitly have periods in them is
 **not recommended**.   While this is generally a bad idea for relational
 databases in general, as the dot is a syntactically significant character,
-the SQLite driver has a bug which requires that SQLAlchemy filter out these
-dots in result sets.
+the SQLite driver up until version **3.10.0** of SQLite has a bug which
+requires that SQLAlchemy filter out these dots in result sets.
+
+.. note::
+
+    The following SQLite issue has been resolved as of version 3.10.0
+    of SQLite.  SQLAlchemy as of **1.1** automatically disables its internal
+    workarounds based on detection of this version.
 
 The bug, entirely outside of SQLAlchemy, can be illustrated thusly::
 
@@ -380,7 +386,7 @@ The bug, entirely outside of SQLAlchemy, can be illustrated thusly::
         union
         select x.a, x.b from x where a=2
     ''')
-    assert [c[0] for c in cursor.description] == ['a', 'b'], \\
+    assert [c[0] for c in cursor.description] == ['a', 'b'], \
         [c[0] for c in cursor.description]
 
 The second assertion fails::
@@ -517,7 +523,7 @@ class _DateTimeMixin(object):
 
 
 class DATETIME(_DateTimeMixin, sqltypes.DateTime):
-    """Represent a Python datetime object in SQLite using a string.
+    r"""Represent a Python datetime object in SQLite using a string.
 
     The default string storage format is::
 
@@ -611,7 +617,7 @@ class DATETIME(_DateTimeMixin, sqltypes.DateTime):
 
 
 class DATE(_DateTimeMixin, sqltypes.Date):
-    """Represent a Python date object in SQLite using a string.
+    r"""Represent a Python date object in SQLite using a string.
 
     The default string storage format is::
 
@@ -672,7 +678,7 @@ class DATE(_DateTimeMixin, sqltypes.Date):
 
 
 class TIME(_DateTimeMixin, sqltypes.Time):
-    """Represent a Python time object in SQLite using a string.
+    r"""Represent a Python time object in SQLite using a string.
 
     The default string storage format is::
 
@@ -978,6 +984,9 @@ class SQLiteExecutionContext(default.DefaultExecutionContext):
         return self.execution_options.get("sqlite_raw_colnames", False)
 
     def _translate_colname(self, colname):
+        # TODO: detect SQLite version 3.10.0 or greater;
+        # see [ticket:3633]
+
         # adjust for dotted column names.  SQLite
         # in the case of UNION may store col names as
         # "tablename.colname", or if using an attached database,
@@ -997,6 +1006,9 @@ class SQLiteDialect(default.DefaultDialect):
     supports_empty_insert = False
     supports_cast = True
     supports_multivalues_insert = True
+
+    # TODO: detect version 3.7.16 or greater;
+    # see [ticket:3634]
     supports_right_nested_joins = False
 
     default_paramstyle = 'qmark'
@@ -1316,9 +1328,9 @@ class SQLiteDialect(default.DefaultDialect):
 
         def parse_fks():
             FK_PATTERN = (
-                '(?:CONSTRAINT (\w+) +)?'
-                'FOREIGN KEY *\( *(.+?) *\) +'
-                'REFERENCES +(?:(?:"(.+?)")|([a-z0-9_]+)) *\((.+?)\)'
+                r'(?:CONSTRAINT (\w+) +)?'
+                r'FOREIGN KEY *\( *(.+?) *\) +'
+                r'REFERENCES +(?:(?:"(.+?)")|([a-z0-9_]+)) *\((.+?)\)'
             )
 
             for match in re.finditer(FK_PATTERN, table_data, re.I):
@@ -1387,10 +1399,10 @@ class SQLiteDialect(default.DefaultDialect):
         unique_constraints = []
 
         def parse_uqs():
-            UNIQUE_PATTERN = '(?:CONSTRAINT (\w+) +)?UNIQUE *\((.+?)\)'
+            UNIQUE_PATTERN = r'(?:CONSTRAINT "?(.+?)"? +)?UNIQUE *\((.+?)\)'
             INLINE_UNIQUE_PATTERN = (
-                '(?:(".+?")|([a-z0-9]+)) '
-                '+[a-z0-9_ ]+? +UNIQUE')
+                r'(?:(".+?")|([a-z0-9]+)) '
+                r'+[a-z0-9_ ]+? +UNIQUE')
 
             for match in re.finditer(UNIQUE_PATTERN, table_data, re.I):
                 name, cols = match.group(1, 2)

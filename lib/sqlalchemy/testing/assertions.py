@@ -1,5 +1,5 @@
 # testing/assertions.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -121,7 +121,7 @@ def uses_deprecated(*messages):
 def _expect_warnings(exc_cls, messages, regex=True, assert_=True):
 
     if regex:
-        filters = [re.compile(msg, re.I) for msg in messages]
+        filters = [re.compile(msg, re.I | re.S) for msg in messages]
     else:
         filters = messages
 
@@ -218,6 +218,8 @@ def le_(a, b, msg=None):
     """Assert a <= b, with repr messaging on failure."""
     assert a <= b, msg or "%r != %r" % (a, b)
 
+def is_true(a, msg=None):
+    is_(a, True, msg=msg)
 
 def is_(a, b, msg=None):
     """Assert a is b, with repr messaging on failure."""
@@ -227,6 +229,16 @@ def is_(a, b, msg=None):
 def is_not_(a, b, msg=None):
     """Assert a is not b, with repr messaging on failure."""
     assert a is not b, msg or "%r is %r" % (a, b)
+
+
+def in_(a, b, msg=None):
+    """Assert a in b, with repr messaging on failure."""
+    assert a in b, msg or "%r not in %r" % (a, b)
+
+
+def not_in_(a, b, msg=None):
+    """Assert a in not b, with repr messaging on failure."""
+    assert a not in b, msg or "%r is in %r" % (a, b)
 
 
 def startswith_(a, fragment, msg=None):

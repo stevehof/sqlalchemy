@@ -25,9 +25,12 @@ the caching of the SQL calls and result sets themselves is available in
 
 .. note::
 
-    The :mod:`sqlalchemy.ext.baked` extension should be considered
-    **experimental** as of 1.0.0.  It provides a dramatically different system
-    of producing queries which has yet to be proven at scale.
+    The :mod:`sqlalchemy.ext.baked` extension is **not for beginners**.  Using
+    it correctly requires a good high level understanding of how SQLAlchemy, the
+    database driver, and the backend database interact with each other.  This
+    extension presents a very specific kind of optimization that is not ordinarily
+    needed.  As noted above, it **does not cache queries**, only the string
+    formulation of the SQL itself.
 
 Synopsis
 --------
@@ -355,6 +358,14 @@ this feature is local to the mapper for ``MyClass``.
 For per-query use, the :func:`.baked_lazyload` strategy may be used,
 which works like any other loader option.
 
+Opting out with the bake_queries flag
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The :func:`.relationship` construct includes a flag
+:paramref:`.relationship.bake_queries` which when set to False will cause
+that relationship to opt out of the baked query system, when the
+application-wide :func:`.bake_lazy_loaders` function has been called to enable
+baked query loaders by default.
 
 API Documentation
 -----------------

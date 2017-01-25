@@ -1,5 +1,5 @@
 # sql/schema.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -46,6 +46,17 @@ from . import ddl
 import types
 
 RETAIN_SCHEMA = util.symbol('retain_schema')
+
+BLANK_SCHEMA = util.symbol(
+    'blank_schema',
+    """Symbol indicating that a :class:`.Table` or :class:`.Sequence`
+    should have 'None' for its schema, even if the parent
+    :class:`.MetaData` has specified a schema.
+
+    .. versionadded:: 1.0.14
+
+    """
+)
 
 
 def _get_table_key(name, schema):
@@ -109,7 +120,7 @@ class SchemaItem(SchemaEventTarget, visitors.Visitable):
 
 
 class Table(DialectKWArgs, SchemaItem, TableClause):
-    """Represent a table in a database.
+    r"""Represent a table in a database.
 
     e.g.::
 
@@ -341,6 +352,17 @@ class Table(DialectKWArgs, SchemaItem, TableClause):
         the table resides in a schema other than the default selected schema
         for the engine's database connection.  Defaults to ``None``.
 
+        If the owning :class:`.MetaData` of this :class:`.Table` specifies
+        its own :paramref:`.MetaData.schema` parameter, then that schema
+        name will be applied to this :class:`.Table` if the schema parameter
+        here is set to ``None``.  To set a blank schema name on a :class:`.Table`
+        that would otherwise use the schema set on the owning :class:`.MetaData`,
+        specify the special symbol :attr:`.BLANK_SCHEMA`.
+
+        .. versionadded:: 1.0.14  Added the :attr:`.BLANK_SCHEMA` symbol to
+           allow a :class:`.Table` to have a blank schema name even when the
+           parent :class:`.MetaData` specifies :paramref:`.MetaData.schema`.
+
         The quoting rules for the schema name are the same as those for the
         ``name`` parameter, in that quoting is applied for reserved words or
         case-sensitive names; to enable unconditional quoting for the
@@ -372,6 +394,8 @@ class Table(DialectKWArgs, SchemaItem, TableClause):
         schema = kw.get('schema', None)
         if schema is None:
             schema = metadata.schema
+        elif schema is BLANK_SCHEMA:
+            schema = None
         keep_existing = kw.pop('keep_existing', False)
         extend_existing = kw.pop('extend_existing', False)
         if 'useexisting' in kw:
@@ -443,6 +467,8 @@ class Table(DialectKWArgs, SchemaItem, TableClause):
         self.schema = kwargs.pop('schema', None)
         if self.schema is None:
             self.schema = metadata.schema
+        elif self.schema is BLANK_SCHEMA:
+            self.schema = None
         else:
             quote_schema = kwargs.pop('quote_schema', None)
             self.schema = quoted_name(self.schema, quote_schema)
@@ -570,6 +596,9 @@ class Table(DialectKWArgs, SchemaItem, TableClause):
         self._validate_dialect_kwargs(kwargs)
 
     def _init_collections(self):
+        pass
+
+    def _reset_exported(self):
         pass
 
     @util.memoized_property
@@ -836,8 +865,14 @@ class Table(DialectKWArgs, SchemaItem, TableClause):
                         schema if referred_schema == self.schema else None)
                 table.append_constraint(
                     c.copy(schema=fk_constraint_schema, target_table=table))
-
             elif not c._type_bound:
+                # skip unique constraints that would be generated
+                # by the 'unique' flag on Column
+                if isinstance(c, UniqueConstraint) and \
+                    len(c.columns) == 1 and \
+                        list(c.columns)[0].unique:
+                    continue
+
                 table.append_constraint(
                     c.copy(schema=schema, target_table=table))
         for index in self.indexes:
@@ -859,7 +894,7 @@ class Column(SchemaItem, ColumnClause):
     __visit_name__ = 'column'
 
     def __init__(self, *args, **kwargs):
-        """
+        r"""
         Construct a new ``Column`` object.
 
         :param name: The name of this column as represented in the database.
@@ -984,8 +1019,12 @@ class Column(SchemaItem, ColumnClause):
             a positional argument; see that class for full detail on the
             structure of the argument.
 
-            Contrast this argument to ``server_default`` which creates a
-            default generator on the database side.
+            Contrast this argument to :paramref:`.Column.server_default`
+            which creates a default generator on the database side.
+
+            .. seealso::
+
+                :ref:`metadata_defaults_toplevel`
 
         :param doc: optional String that can be used by the ORM or similar
             to document attributes.   This attribute does not render SQL
@@ -1006,10 +1045,14 @@ class Column(SchemaItem, ColumnClause):
         :param info: Optional data dictionary which will be populated into the
             :attr:`.SchemaItem.info` attribute of this object.
 
-        :param nullable: If set to the default of ``True``, indicates the
-            column will be rendered as allowing NULL, else it's rendered as
-            NOT NULL. This parameter is only used when issuing CREATE TABLE
-            statements.
+        :param nullable: When set to ``False``, will cause the "NOT NULL"
+            phrase to be added when generating DDL for the column.   When
+            ``True``, will normally generate nothing (in SQL this defaults to
+            "NULL"), except in some very specific backend-specific edge cases
+            where "NULL" may render explicitly.   Defaults to ``True`` unless
+            :paramref:`~.Column.primary_key` is also ``True``, in which case it
+            defaults to ``False``.  This parameter is only used when issuing
+            CREATE TABLE statements.
 
         :param onupdate: A scalar, Python callable, or
             :class:`~sqlalchemy.sql.expression.ClauseElement` representing a
@@ -1018,6 +1061,10 @@ class Column(SchemaItem, ColumnClause):
             present in the SET clause of the update. This is a shortcut to
             using :class:`.ColumnDefault` as a positional argument with
             ``for_update=True``.
+
+            .. seealso::
+
+                :ref:`metadata_defaults` - complete discussion of onupdate
 
         :param primary_key: If ``True``, marks this column as a primary key
             column. Multiple columns can have this flag set to specify
@@ -1051,12 +1098,22 @@ class Column(SchemaItem, ColumnClause):
             construct does not specify any DDL and the implementation is left
             to the database, such as via a trigger.
 
+            .. seealso::
+
+                :ref:`server_defaults` - complete discussion of server side
+                defaults
+
         :param server_onupdate:   A :class:`.FetchedValue` instance
-             representing a database-side default generation function. This
+             representing a database-side default generation function,
+             such as a trigger. This
              indicates to SQLAlchemy that a newly generated value will be
-             available after updates. This construct does not specify any DDL
-             and the implementation is left to the database, such as via a
-             trigger.
+             available after updates. This construct does not actually
+             implement any kind of generation function within the database,
+             which instead must be specified separately.
+
+            .. seealso::
+
+                :ref:`triggered_columns`
 
         :param quote: Force quoting of this column's name on or off,
              corresponding to ``True`` or ``False``. When left at its default
@@ -1441,7 +1498,7 @@ class ForeignKey(DialectKWArgs, SchemaItem):
                  initially=None, link_to_name=False, match=None,
                  info=None,
                  **dialect_kw):
-        """
+        r"""
         Construct a column-level FOREIGN KEY.
 
         The :class:`.ForeignKey` object when constructed generates a
@@ -2040,8 +2097,9 @@ class Sequence(DefaultGenerator):
 
     is_sequence = True
 
-    def __init__(self, name, start=None, increment=None, schema=None,
-                 optional=False, quote=None, metadata=None,
+    def __init__(self, name, start=None, increment=None, minvalue=None,
+                 maxvalue=None, nominvalue=None, nomaxvalue=None, cycle=None,
+                 schema=None, optional=False, quote=None, metadata=None,
                  quote_schema=None,
                  for_update=False):
         """Construct a :class:`.Sequence` object.
@@ -2057,8 +2115,58 @@ class Sequence(DefaultGenerator):
          the database as the value of the "INCREMENT BY" clause.  If ``None``,
          the clause is omitted, which on most platforms indicates an
          increment of 1.
+        :param minvalue: the minimum value of the sequence.  This
+         value is used when the CREATE SEQUENCE command is emitted to
+         the database as the value of the "MINVALUE" clause.  If ``None``,
+         the clause is omitted, which on most platforms indicates a
+         minvalue of 1 and -2^63-1 for ascending and descending sequences,
+         respectively.
+
+         .. versionadded:: 1.0.7
+
+        :param maxvalue: the maximum value of the sequence.  This
+         value is used when the CREATE SEQUENCE command is emitted to
+         the database as the value of the "MAXVALUE" clause.  If ``None``,
+         the clause is omitted, which on most platforms indicates a
+         maxvalue of 2^63-1 and -1 for ascending and descending sequences,
+         respectively.
+
+         .. versionadded:: 1.0.7
+
+        :param nominvalue: no minimum value of the sequence.  This
+         value is used when the CREATE SEQUENCE command is emitted to
+         the database as the value of the "NO MINVALUE" clause.  If ``None``,
+         the clause is omitted, which on most platforms indicates a
+         minvalue of 1 and -2^63-1 for ascending and descending sequences,
+         respectively.
+
+         .. versionadded:: 1.0.7
+
+        :param nomaxvalue: no maximum value of the sequence.  This
+         value is used when the CREATE SEQUENCE command is emitted to
+         the database as the value of the "NO MAXVALUE" clause.  If ``None``,
+         the clause is omitted, which on most platforms indicates a
+         maxvalue of 2^63-1 and -1 for ascending and descending sequences,
+         respectively.
+
+         .. versionadded:: 1.0.7
+
+        :param cycle: allows the sequence to wrap around when the maxvalue
+         or minvalue has been reached by an ascending or descending sequence
+         respectively.  This value is used when the CREATE SEQUENCE command
+         is emitted to the database as the "CYCLE" clause.  If the limit is
+         reached, the next number generated will be the minvalue or maxvalue,
+         respectively.  If cycle=False (the default) any calls to nextval
+         after the sequence has reached its maximum value will return an
+         error.
+
+         .. versionadded:: 1.0.7
+
         :param schema: Optional schema name for the sequence, if located
-         in a schema other than the default.
+         in a schema other than the default.  The rules for selecting the
+         schema name when a :class:`.MetaData` is also present are the same
+         as that of :paramref:`.Table.schema`.
+
         :param optional: boolean value, when ``True``, indicates that this
          :class:`.Sequence` object only needs to be explicitly generated
          on backends that don't provide another way to generate primary
@@ -2101,8 +2209,15 @@ class Sequence(DefaultGenerator):
         self.name = quoted_name(name, quote)
         self.start = start
         self.increment = increment
+        self.minvalue = minvalue
+        self.maxvalue = maxvalue
+        self.nominvalue = nominvalue
+        self.nomaxvalue = nomaxvalue
+        self.cycle = cycle
         self.optional = optional
-        if metadata is not None and schema is None and metadata.schema:
+        if schema is BLANK_SCHEMA:
+            self.schema = schema = None
+        elif metadata is not None and schema is None and metadata.schema:
             self.schema = schema = metadata.schema
         else:
             self.schema = quoted_name(schema, quote_schema)
@@ -2284,7 +2399,7 @@ class Constraint(DialectKWArgs, SchemaItem):
     def __init__(self, name=None, deferrable=None, initially=None,
                  _create_rule=None, info=None, _type_bound=False,
                  **dialect_kw):
-        """Create a SQL constraint.
+        r"""Create a SQL constraint.
 
         :param name:
           Optional, the in-database name of this ``Constraint``.
@@ -2464,7 +2579,7 @@ class ColumnCollectionConstraint(ColumnCollectionMixin, Constraint):
     """A constraint that proxies a ColumnCollection."""
 
     def __init__(self, *columns, **kw):
-        """
+        r"""
         :param \*columns:
           A sequence of column names or Column objects.
 
@@ -2531,7 +2646,7 @@ class CheckConstraint(ColumnCollectionConstraint):
     def __init__(self, sqltext, name=None, deferrable=None,
                  initially=None, table=None, info=None, _create_rule=None,
                  _autoattach=True, _type_bound=False):
-        """Construct a CHECK constraint.
+        r"""Construct a CHECK constraint.
 
         :param sqltext:
           A string containing the constraint definition, which will be used
@@ -2619,7 +2734,7 @@ class ForeignKeyConstraint(ColumnCollectionConstraint):
                  ondelete=None, deferrable=None, initially=None,
                  use_alter=False, link_to_name=False, match=None,
                  table=None, info=None, **dialect_kw):
-        """Construct a composite-capable FOREIGN KEY.
+        r"""Construct a composite-capable FOREIGN KEY.
 
         :param columns: A sequence of local column names. The named columns
           must be defined and present in the parent Table. The names should
@@ -3068,7 +3183,7 @@ class Index(DialectKWArgs, ColumnCollectionMixin, SchemaItem):
     __visit_name__ = 'index'
 
     def __init__(self, name, *expressions, **kw):
-        """Construct an index object.
+        r"""Construct an index object.
 
         :param name:
           The name of the index
@@ -3235,8 +3350,21 @@ class MetaData(SchemaItem):
 
         :param schema:
            The default schema to use for the :class:`.Table`,
-           :class:`.Sequence`, and other objects associated with this
-           :class:`.MetaData`. Defaults to ``None``.
+           :class:`.Sequence`, and potentially other objects associated with
+           this :class:`.MetaData`. Defaults to ``None``.
+
+           When this value is set, any :class:`.Table` or :class:`.Sequence`
+           which specifies ``None`` for the schema parameter will instead
+           have this schema name defined.  To build a :class:`.Table`
+           or :class:`.Sequence` that still has ``None`` for the schema
+           even when this parameter is present, use the :attr:`.BLANK_SCHEMA`
+           symbol.
+
+           .. seealso::
+
+                :paramref:`.Table.schema`
+
+                :paramref:`.Sequence.schema`
 
         :param quote_schema:
             Sets the ``quote_schema`` flag for those :class:`.Table`,
@@ -3479,7 +3607,7 @@ class MetaData(SchemaItem):
                 extend_existing=False,
                 autoload_replace=True,
                 **dialect_kwargs):
-        """Load all available table definitions from the database.
+        r"""Load all available table definitions from the database.
 
         Automatically creates ``Table`` entries in this ``MetaData`` for any
         table available in the database but not yet present in the

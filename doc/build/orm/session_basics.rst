@@ -88,7 +88,7 @@ be set up as in the example above, using the ``bind`` argument.
 When you write your application, place the
 :class:`.sessionmaker` factory at the global level.   This
 factory can then
-be used by the rest of the applcation as the source of new :class:`.Session`
+be used by the rest of the application as the source of new :class:`.Session`
 instances, keeping the configuration for how :class:`.Session` objects
 are constructed in one place.
 
@@ -158,7 +158,7 @@ Session Frequently Asked Questions
 ===================================
 
 By this point, many users already have questions about sessions.
-This section presents a mini-FAQ (note that we have also a `real FAQ </faq/index>`)
+This section presents a mini-FAQ (note that we have also a :doc:`real FAQ </faq/index>`)
 of the most basic issues one is presented with when using a :class:`.Session`.
 
 When do I make a :class:`.sessionmaker`?
@@ -247,7 +247,7 @@ While there's no one-size-fits-all recommendation for how transaction
 scope should be determined, there are common patterns.   Especially
 if one is writing a web application, the choice is pretty much established.
 
-A web application is the easiest case because such an appication is already
+A web application is the easiest case because such an application is already
 constructed around a single, consistent scope - this is the **request**,
 which represents an incoming request from a browser, the processing
 of that request to formulate a response, and finally the delivery of that
@@ -410,7 +410,7 @@ by default. This also defeats the purpose of using the Session as a cache.
 The :class:`.Session` is not designed to be a
 global object from which everyone consults as a "registry" of objects.
 That's more the job of a **second level cache**.   SQLAlchemy provides
-a pattern for implementing second level caching using `dogpile.cache <http://dogpilecache.readthedocs.org/>`_,
+a pattern for implementing second level caching using `dogpile.cache <https://dogpilecache.readthedocs.io/>`_,
 via the :ref:`examples_caching` example.
 
 How can I get the :class:`~sqlalchemy.orm.session.Session` for a certain object?

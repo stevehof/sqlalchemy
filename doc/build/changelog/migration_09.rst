@@ -550,7 +550,7 @@ The precedence rules for COLLATE have been changed
 
 Previously, an expression like the following::
 
-    print (column('x') == 'somevalue').collate("en_EN")
+    print((column('x') == 'somevalue').collate("en_EN"))
 
 would produce an expression like this::
 
@@ -567,7 +567,7 @@ by that of most database documentation::
 The potentially backwards incompatible change arises if the :meth:`.collate`
 operator is being applied to the right-hand column, as follows::
 
-    print column('x') == literal('somevalue').collate("en_EN")
+    print(column('x') == literal('somevalue').collate("en_EN"))
 
 In 0.8, this produces::
 
@@ -584,11 +584,11 @@ The :meth:`.ColumnOperators.collate` operator now works more appropriately withi
 generated::
 
     >>> # 0.8
-    >>> print column('x').collate('en_EN').desc()
+    >>> print(column('x').collate('en_EN').desc())
     (x COLLATE en_EN) DESC
 
     >>> # 0.9
-    >>> print column('x').collate('en_EN').desc()
+    >>> print(column('x').collate('en_EN').desc())
     x COLLATE en_EN DESC
 
 :ticket:`2879`
@@ -606,7 +606,7 @@ signs within the enumerated values::
     >>> from sqlalchemy.dialects import postgresql
     >>> type = postgresql.ENUM('one', 'two', "three's", name="myenum")
     >>> from sqlalchemy.dialects.postgresql import base
-    >>> print base.CreateEnumType(type).compile(dialect=postgresql.dialect())
+    >>> print(base.CreateEnumType(type).compile(dialect=postgresql.dialect()))
     CREATE TYPE myenum AS ENUM ('one','two','three''s')
 
 Existing workarounds which already escape single quote signs will need to be
@@ -1085,7 +1085,7 @@ classes, including relationships, based on a reflected schema::
     session.commit()
 
     # collection-based relationships are by default named "<classname>_collection"
-    print (u1.address_collection)
+    print(u1.address_collection)
 
 Beyond that, the :class:`.AutomapBase` class is a declarative base, and supports
 all the features that declarative does.  The "automapping" feature can be used
@@ -1095,7 +1095,7 @@ can be dropped in using callable functions.
 
 It is hoped that the :class:`.AutomapBase` system provides a quick
 and modernized solution to the problem that the very famous
-`SQLSoup <https://sqlsoup.readthedocs.org/en/latest/>`_
+`SQLSoup <https://sqlsoup.readthedocs.io/en/latest/>`_
 also tries to solve, that of generating a quick and rudimentary object
 model from an existing database on the fly.  By addressing the issue strictly
 at the mapper configuration level, and integrating fully with existing
@@ -1125,7 +1125,7 @@ as INNER JOINs could always be flattened)::
 
     SELECT a.*, b.*, c.* FROM a LEFT OUTER JOIN (b JOIN c ON b.id = c.id) ON a.id
 
-This was due to the fact that SQLite, even today, cannot parse a statement of the above format::
+This was due to the fact that SQLite up until version **3.7.16** cannot parse a statement of the above format::
 
     SQLite version 3.7.15.2 2013-01-09 11:53:05
     Enter ".help" for instructions
@@ -1247,6 +1247,12 @@ with the above queries rewritten as::
     FROM order_item AS order_item_1
         JOIN item ON item.id = order_item_1.item_id AND item.type IN (?)
     ) AS anon_1 ON "order".id = anon_1.order_item_1_order_id
+
+.. note::
+
+    As of SQLAlchemy 1.1, the workarounds present in this feature for SQLite
+    will automatically disable themselves when SQLite version **3.7.16**
+    or greater is detected, as SQLite has repaired support for right-nested joins.
 
 The :meth:`.Join.alias`, :func:`.aliased` and :func:`.with_polymorphic` functions now
 support a new argument, ``flat=True``, which is used to construct aliases of joined-table
@@ -1522,41 +1528,41 @@ on backends that don't feature ``true``/``false`` constant beahvior::
     >>> from sqlalchemy import select, and_, false, true
     >>> from sqlalchemy.dialects import mysql, postgresql
 
-    >>> print select([t1]).where(t1.c.x).compile(dialect=mysql.dialect())
+    >>> print(select([t1]).where(t1.c.x).compile(dialect=mysql.dialect()))
     SELECT t.x, t.y  FROM t WHERE t.x = 1
 
 The :func:`.and_` and :func:`.or_` constructs will now exhibit quasi
 "short circuit" behavior, that is truncating a rendered expression, when a
 :func:`.true` or :func:`.false` constant is present::
 
-    >>> print select([t1]).where(and_(t1.c.y > 5, false())).compile(
-    ...     dialect=postgresql.dialect())
+    >>> print(select([t1]).where(and_(t1.c.y > 5, false())).compile(
+    ...     dialect=postgresql.dialect()))
     SELECT t.x, t.y FROM t WHERE false
 
 :func:`.true` can be used as the base to build up an expression::
 
     >>> expr = true()
     >>> expr = expr & (t1.c.y > 5)
-    >>> print select([t1]).where(expr)
+    >>> print(select([t1]).where(expr))
     SELECT t.x, t.y FROM t WHERE t.y > :y_1
 
 The boolean constants :func:`.true` and :func:`.false` themselves render as
 ``0 = 1`` and ``1 = 1`` for a backend with no boolean constants::
 
-    >>> print select([t1]).where(and_(t1.c.y > 5, false())).compile(
-    ...     dialect=mysql.dialect())
+    >>> print(select([t1]).where(and_(t1.c.y > 5, false())).compile(
+    ...     dialect=mysql.dialect()))
     SELECT t.x, t.y FROM t WHERE 0 = 1
 
 Interpretation of ``None``, while not particularly valid SQL, is at least
 now consistent::
 
-    >>> print select([t1.c.x]).where(None)
+    >>> print(select([t1.c.x]).where(None))
     SELECT t.x FROM t WHERE NULL
 
-    >>> print select([t1.c.x]).where(None).where(None)
+    >>> print(select([t1.c.x]).where(None).where(None))
     SELECT t.x FROM t WHERE NULL AND NULL
 
-    >>> print select([t1.c.x]).where(and_(None, None))
+    >>> print(select([t1.c.x]).where(and_(None, None)))
     SELECT t.x FROM t WHERE NULL AND NULL
 
 :ticket:`2804`
@@ -1580,7 +1586,7 @@ E.g. an example like::
 
     stmt = select([expr]).order_by(expr)
 
-    print stmt
+    print(stmt)
 
 Prior to 0.9 would render as::
 

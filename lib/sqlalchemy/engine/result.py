@@ -1,5 +1,5 @@
 # engine/result.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -192,6 +192,7 @@ class ResultMetaData(object):
         typemap = dialect.dbapi_type_map
         translate_colname = context._translate_colname
         self.case_sensitive = case_sensitive = dialect.case_sensitive
+        self._orig_processors = None
 
         if context.result_column_struct:
             result_columns, cols_are_ordered = context.result_column_struct
@@ -221,7 +222,7 @@ class ResultMetaData(object):
                 in enumerate(result_columns)
             ]
             self.keys = [
-                elem[1] for elem in result_columns
+                elem[0] for elem in result_columns
             ]
         else:
             # case 2 - raw string, or number of columns in result does
@@ -236,7 +237,8 @@ class ResultMetaData(object):
             # that SQLAlchemy has used up through 0.9.
 
             if num_ctx_cols:
-                result_map = self._create_result_map(result_columns)
+                result_map = self._create_result_map(
+                    result_columns, case_sensitive)
 
             raw = []
             self.keys = []
@@ -303,6 +305,7 @@ class ResultMetaData(object):
                 for rec in raw:
                     key = rec[1]
                     if key in seen:
+                        key = key.lower() if not self.case_sensitive else key
                         by_key[key] = (None, by_key[key][1], None)
                     seen.add(key)
 
@@ -329,10 +332,12 @@ class ResultMetaData(object):
                 ])
 
     @classmethod
-    def _create_result_map(cls, result_columns):
+    def _create_result_map(cls, result_columns, case_sensitive=True):
         d = {}
         for elem in result_columns:
             key, rec = elem[0], elem[1:]
+            if not case_sensitive:
+                key = key.lower()
             if key in d:
                 # conflicting keyname, just double up the list
                 # of objects.  this will cause an "ambiguous name"
@@ -413,11 +418,11 @@ class ResultMetaData(object):
         else:
             return self._key_fallback(key, False) is not None
 
-    def _getter(self, key):
+    def _getter(self, key, raiseerr=True):
         if key in self._keymap:
             processor, obj, index = self._keymap[key]
         else:
-            ret = self._key_fallback(key, False)
+            ret = self._key_fallback(key, raiseerr)
             if ret is None:
                 return None
             processor, obj, index = ret
@@ -491,11 +496,21 @@ class ResultProxy(object):
             context.engine._should_log_debug()
         self._init_metadata()
 
-    def _getter(self, key):
-        return self._metadata._getter(key)
+    def _getter(self, key, raiseerr=True):
+        try:
+            getter = self._metadata._getter
+        except AttributeError:
+            return self._non_result(None)
+        else:
+            return getter(key, raiseerr)
 
     def _has_key(self, key):
-        return self._metadata._has_key(key)
+        try:
+            has_key = self._metadata._has_key
+        except AttributeError:
+            return self._non_result(None)
+        else:
+            return has_key(key)
 
     def _init_metadata(self):
         metadata = self._cursor_description()
@@ -658,7 +673,7 @@ class ResultProxy(object):
         """Close this ResultProxy.
 
         This closes out the underlying DBAPI cursor corresonding
-        to the statement execution, if one is stil present.  Note that the
+        to the statement execution, if one is still present.  Note that the
         DBAPI cursor is automatically released when the :class:`.ResultProxy`
         exhausts all available rows.  :meth:`.ResultProxy.close` is generally
         an optional method except in the case when discarding a
@@ -699,7 +714,7 @@ class ResultProxy(object):
         while True:
             row = self.fetchone()
             if row is None:
-                raise StopIteration
+                return
             else:
                 yield row
 
@@ -1224,16 +1239,21 @@ class BufferedColumnResultProxy(ResultProxy):
 
     def _init_metadata(self):
         super(BufferedColumnResultProxy, self)._init_metadata()
+
         metadata = self._metadata
-        # orig_processors will be used to preprocess each row when they are
-        # constructed.
-        metadata._orig_processors = metadata._processors
-        # replace the all type processors by None processors.
-        metadata._processors = [None for _ in range(len(metadata.keys))]
-        keymap = {}
-        for k, (func, obj, index) in metadata._keymap.items():
-            keymap[k] = (None, obj, index)
-        self._metadata._keymap = keymap
+
+        # don't double-replace the processors, in the case
+        # of a cached ResultMetaData
+        if metadata._orig_processors is None:
+            # orig_processors will be used to preprocess each row when
+            # they are constructed.
+            metadata._orig_processors = metadata._processors
+            # replace the all type processors by None processors.
+            metadata._processors = [None for _ in range(len(metadata.keys))]
+            keymap = {}
+            for k, (func, obj, index) in metadata._keymap.items():
+                keymap[k] = (None, obj, index)
+            metadata._keymap = keymap
 
     def fetchall(self):
         # can't call cursor.fetchall(), since rows must be

@@ -420,7 +420,7 @@ class RawSelectTest(QueryTest, AssertsCompiledSQL):
         self.assert_compile(
             select([Foo]).where(Foo.foob == 'somename').order_by(Foo.foob),
             "SELECT users.id, users.name FROM users "
-            "WHERE coalesce(users.name) = :coalesce_1 "
+            "WHERE coalesce(users.name) = :param_1 "
             "ORDER BY coalesce(users.name)"
         )
 
@@ -1493,6 +1493,63 @@ class ColumnPropertyTest(_fixtures.FixtureTest, AssertsCompiledSQL):
             "ead": column_property(stmt)
         }, with_polymorphic="*" if polymorphic else None)
         mapper(Address, addresses)
+
+    def _func_fixture(self, label=False):
+        User = self.classes.User
+        users = self.tables.users
+
+        if label:
+            mapper(User, users, properties={
+                "foobar": column_property(
+                    func.foob(users.c.name).label(None)
+                )
+            })
+        else:
+            mapper(User, users, properties={
+                "foobar": column_property(
+                    func.foob(users.c.name)
+                )
+            })
+
+    def test_anon_label_function_auto(self):
+        self._func_fixture()
+        User = self.classes.User
+
+        s = Session()
+
+        u1 = aliased(User)
+        self.assert_compile(
+            s.query(User.foobar, u1.foobar),
+            "SELECT foob(users.name) AS foob_1, foob(users_1.name) AS foob_2 "
+            "FROM users, users AS users_1"
+        )
+
+    def test_anon_label_function_manual(self):
+        self._func_fixture(label=True)
+        User = self.classes.User
+
+        s = Session()
+
+        u1 = aliased(User)
+        self.assert_compile(
+            s.query(User.foobar, u1.foobar),
+            "SELECT foob(users.name) AS foob_1, foob(users_1.name) AS foob_2 "
+            "FROM users, users AS users_1"
+        )
+
+    def test_anon_label_ad_hoc_labeling(self):
+        self._func_fixture()
+        User = self.classes.User
+
+        s = Session()
+
+        u1 = aliased(User)
+        self.assert_compile(
+            s.query(User.foobar.label('x'), u1.foobar.label('y')),
+            "SELECT foob(users.name) AS x, foob(users_1.name) AS y "
+            "FROM users, users AS users_1"
+        )
+
 
     def test_order_by_column_prop_string(self):
         User, Address = self.classes("User", "Address")
@@ -2921,6 +2978,25 @@ class TextTest(QueryTest, AssertsCompiledSQL):
             [User(id=7), User(id=8), User(id=9), User(id=10)]
         )
 
+    def test_group_by_accepts_text(self):
+        User = self.classes.User
+        s = create_session()
+
+        q = s.query(User).group_by(text("name"))
+        self.assert_compile(
+            q,
+            "SELECT users.id AS users_id, users.name AS users_name "
+            "FROM users GROUP BY name"
+        )
+
+    def test_orm_columns_accepts_text(self):
+        from sqlalchemy.orm.base import _orm_columns
+        t = text("x")
+        eq_(
+            _orm_columns(t),
+            [t]
+        )
+
     def test_order_by_w_eager_one(self):
         User = self.classes.User
         s = create_session()
@@ -3139,6 +3215,39 @@ class ParentTest(QueryTest, AssertsCompiledSQL):
         # assert
         #     sess.query(Order).with_parent(None, property='addresses').all()
         #     == [Order(description="order 5")]
+
+    def test_select_from(self):
+        User, Address = self.classes.User, self.classes.Address
+
+        sess = create_session()
+        u1 = sess.query(User).get(7)
+        q = sess.query(Address).select_from(Address).with_parent(u1)
+        self.assert_compile(
+            q,
+            "SELECT addresses.id AS addresses_id, "
+            "addresses.user_id AS addresses_user_id, "
+            "addresses.email_address AS addresses_email_address "
+            "FROM addresses WHERE :param_1 = addresses.user_id",
+            {'param_1': 7}
+        )
+
+    @testing.fails("issue #3607")
+    def test_select_from_alias(self):
+        User, Address = self.classes.User, self.classes.Address
+
+        sess = create_session()
+        u1 = sess.query(User).get(7)
+        a1 = aliased(Address)
+        q = sess.query(a1).with_parent(u1)
+        self.assert_compile(
+            q,
+            "SELECT addresses_1.id AS addresses_1_id, "
+            "addresses_1.user_id AS addresses_1_user_id, "
+            "addresses_1.email_address AS addresses_1_email_address "
+            "FROM addresses AS addresses_1 "
+            "WHERE :param_1 = addresses_1.user_id",
+            {'param_1': 7}
+        )
 
     def test_noparent(self):
         Item, User = self.classes.Item, self.classes.User
@@ -3390,7 +3499,8 @@ class WithTransientOnNone(_fixtures.FixtureTest, AssertsCompiledSQL):
         )
 
 
-class SynonymTest(QueryTest):
+class SynonymTest(QueryTest, AssertsCompiledSQL):
+    __dialect__ = 'default'
 
     @classmethod
     def setup_mappers(cls):
@@ -3510,6 +3620,20 @@ class SynonymTest(QueryTest):
                 Order(description="order 1"), Order(description="order 3"),
                 Order(description="order 5")] == o
 
+    def test_froms_aliased_col(self):
+        Address, User = self.classes.Address, self.classes.User
+
+        sess = create_session()
+        ua = aliased(User)
+
+        q = sess.query(ua.name_syn).join(
+            Address, ua.id == Address.user_id)
+        self.assert_compile(
+            q,
+            "SELECT users_1.name AS users_1_name FROM "
+            "users AS users_1 JOIN addresses ON users_1.id = addresses.user_id"
+        )
+
 
 class ImmediateTest(_fixtures.FixtureTest):
     run_inserts = 'once'
@@ -3582,6 +3706,60 @@ class ImmediateTest(_fixtures.FixtureTest):
             sa.orm.exc.MultipleResultsFound,
             sess.query(User).join(User.addresses).filter(User.id.in_([8, 9])).
             order_by(User.id).one)
+
+    def test_one_or_none(self):
+        User, Address = self.classes.User, self.classes.Address
+
+        sess = create_session()
+
+        eq_(sess.query(User).filter(User.id == 99).one_or_none(), None)
+
+        eq_(sess.query(User).filter(User.id == 7).one_or_none().id, 7)
+
+        assert_raises_message(
+            sa.orm.exc.MultipleResultsFound,
+            r"Multiple rows were found for one_or_none\(\)",
+            sess.query(User).one_or_none)
+
+        eq_(sess.query(User.id, User.name).filter(User.id == 99).one_or_none(), None)
+
+        eq_(sess.query(User.id, User.name).filter(User.id == 7).one_or_none(),
+            (7, 'jack'))
+
+        assert_raises(
+            sa.orm.exc.MultipleResultsFound,
+            sess.query(User.id, User.name).one_or_none)
+
+        eq_(
+            (sess.query(User, Address).join(User.addresses).
+           filter(Address.id == 99)).one_or_none(), None)
+
+        eq_((sess.query(User, Address).
+            join(User.addresses).
+            filter(Address.id == 4)).one_or_none(),
+           (User(id=8), Address(id=4)))
+
+        assert_raises(
+            sa.orm.exc.MultipleResultsFound,
+            sess.query(User, Address).join(User.addresses).one_or_none)
+
+        # this result returns multiple rows, the first
+        # two rows being the same.  but uniquing is
+        # not applied for a column based result.
+        assert_raises(
+            sa.orm.exc.MultipleResultsFound,
+            sess.query(User.id).join(User.addresses).
+            filter(User.id.in_([8, 9])).order_by(User.id).one_or_none)
+
+        # test that a join which ultimately returns
+        # multiple identities across many rows still
+        # raises, even though the first two rows are of
+        # the same identity and unique filtering
+        # is applied ([ticket:1688])
+        assert_raises(
+            sa.orm.exc.MultipleResultsFound,
+            sess.query(User).join(User.addresses).filter(User.id.in_([8, 9])).
+            order_by(User.id).one_or_none)
 
     @testing.future
     def test_getslice(self):

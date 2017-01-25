@@ -1,5 +1,5 @@
 import warnings
-from sqlalchemy.testing import eq_, assert_raises, assert_raises_message
+from sqlalchemy.testing import eq_, is_, assert_raises, assert_raises_message
 from sqlalchemy import *
 from sqlalchemy import exc as sa_exc, util, event
 from sqlalchemy.orm import *
@@ -76,6 +76,65 @@ class O2MTest(fixtures.MappedTest):
         eq_(compare, result)
         eq_(l[0].parent_foo.data, 'foo #1')
         eq_(l[1].parent_foo.data, 'foo #1')
+
+
+class PolyExpressionEagerLoad(fixtures.DeclarativeMappedTest):
+    run_setup_mappers = 'once'
+    __dialect__ = 'default'
+
+    @classmethod
+    def setup_classes(cls):
+        Base = cls.DeclarativeBasic
+
+        class A(fixtures.ComparableEntity, Base):
+            __tablename__ = 'a'
+
+            id = Column(Integer, primary_key=True,
+                        test_needs_autoincrement=True)
+            discriminator = Column(String(50), nullable=False)
+            child_id = Column(Integer, ForeignKey('a.id'))
+            child = relationship('A')
+
+            p_a = case([
+                (discriminator == "a", "a"),
+            ], else_="b")
+
+            __mapper_args__ = {
+                'polymorphic_identity': 'a',
+                "polymorphic_on": p_a,
+            }
+
+        class B(A):
+            __mapper_args__ = {
+                'polymorphic_identity': 'b'
+            }
+
+    @classmethod
+    def insert_data(cls):
+        A = cls.classes.A
+
+        session = Session(testing.db)
+        session.add_all([
+            A(id=1, discriminator='a'),
+            A(id=2, discriminator='b', child_id=1),
+            A(id=3, discriminator='c', child_id=1),
+        ])
+        session.commit()
+
+    def test_joinedload(self):
+        A = self.classes.A
+        B = self.classes.B
+
+        session = Session(testing.db)
+        result = session.query(A).filter_by(child_id=None).\
+            options(joinedload('child')).one()
+
+
+        eq_(
+            result,
+            A(id=1, discriminator='a', child=[B(id=2), B(id=3)]),
+        )
+
 
 class PolymorphicResolutionMultiLevel(fixtures.DeclarativeMappedTest,
                                         testing.AssertsCompiledSQL):
@@ -395,6 +454,22 @@ class PolymorphicOnNotLocalTest(fixtures.MappedTest):
 
     def _roundtrip(self, set_event=True, parent_ident='parent', child_ident='child'):
         Parent, Child = self.classes.Parent, self.classes.Child
+
+        # locate the "polymorphic_on" ColumnProperty.   This isn't
+        # "officially" stored at the moment so do some heuristics to find it.
+        parent_mapper = inspect(Parent)
+        for prop in parent_mapper.column_attrs:
+            if not prop.instrument:
+                break
+        else:
+            prop = parent_mapper._columntoproperty[
+                parent_mapper.polymorphic_on]
+
+        # then make sure the column we will query on matches.
+        is_(
+            parent_mapper.polymorphic_on,
+            prop.columns[0]
+        )
 
         if set_event:
             @event.listens_for(Parent, "init", propagate=True)
@@ -1147,6 +1222,62 @@ class FlushTest(fixtures.MappedTest):
         a.password = 'sadmin'
         sess.flush()
         assert user_roles.count().scalar() == 1
+
+
+class OptimizedGetOnDeferredTest(fixtures.MappedTest):
+    """test that the 'optimized get' path accommodates deferred columns."""
+
+    @classmethod
+    def define_tables(cls, metadata):
+        Table(
+            "a", metadata,
+            Column('id', Integer, primary_key=True,
+                   test_needs_autoincrement=True)
+        )
+        Table(
+            "b", metadata,
+            Column('id', Integer, ForeignKey('a.id'), primary_key=True),
+            Column('data', String(10))
+        )
+
+    @classmethod
+    def setup_classes(cls):
+        class A(cls.Basic):
+            pass
+
+        class B(A):
+            pass
+
+    @classmethod
+    def setup_mappers(cls):
+        A, B = cls.classes("A", "B")
+        a, b = cls.tables("a", "b")
+
+        mapper(A, a)
+        mapper(B, b, inherits=A, properties={
+            'data': deferred(b.c.data),
+            'expr': column_property(b.c.data + 'q', deferred=True)
+        })
+
+    def test_column_property(self):
+        A, B = self.classes("A", "B")
+        sess = Session()
+        b1 = B(data='x')
+        sess.add(b1)
+        sess.flush()
+
+        eq_(b1.expr, 'xq')
+
+    def test_expired_column(self):
+        A, B = self.classes("A", "B")
+        sess = Session()
+        b1 = B(data='x')
+        sess.add(b1)
+        sess.flush()
+        sess.expire(b1, ['data'])
+
+        eq_(b1.data, 'x')
+
 
 class JoinedNoFKSortingTest(fixtures.MappedTest):
     @classmethod
@@ -2041,65 +2172,6 @@ class OptimizedLoadTest(fixtures.MappedTest):
             )
         )
 
-class TransientInheritingGCTest(fixtures.TestBase):
-    __requires__ = ('cpython',)
-
-    def _fixture(self):
-        Base = declarative_base()
-
-        class A(Base):
-            __tablename__ = 'a'
-            id = Column(Integer, primary_key=True,
-                                    test_needs_autoincrement=True)
-            data = Column(String(10))
-        self.A = A
-        return Base
-
-    def setUp(self):
-        self.Base = self._fixture()
-
-    def tearDown(self):
-        self.Base.metadata.drop_all(testing.db)
-        #clear_mappers()
-        self.Base = None
-
-    def _do_test(self, go):
-        B = go()
-        self.Base.metadata.create_all(testing.db)
-        sess = Session(testing.db)
-        sess.add(B(data='some b'))
-        sess.commit()
-
-        b1 = sess.query(B).one()
-        assert isinstance(b1, B)
-        sess.close()
-        del sess
-        del b1
-        del B
-
-        gc_collect()
-
-        eq_(
-            len(self.A.__subclasses__()),
-            0)
-
-    def test_single(self):
-        def go():
-            class B(self.A):
-                pass
-            return B
-        self._do_test(go)
-
-    @testing.fails_if(lambda: True,
-                "not supported for joined inh right now.")
-    def test_joined(self):
-        def go():
-            class B(self.A):
-                __tablename__ = 'b'
-                id = Column(Integer, ForeignKey('a.id'),
-                        primary_key=True)
-            return B
-        self._do_test(go)
 
 class NoPKOnSubTableWarningTest(fixtures.TestBase):
 

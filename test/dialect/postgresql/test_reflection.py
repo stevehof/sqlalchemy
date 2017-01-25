@@ -572,6 +572,29 @@ class ReflectionTest(fixtures.TestBase):
                 ['test_schema_2.some_other_table', 'test_schema.some_table']))
 
     @testing.provide_metadata
+    def test_cross_schema_reflection_metadata_uses_schema(self):
+        # test [ticket:3716]
+
+        metadata = self.metadata
+
+        Table('some_table', metadata,
+              Column('id', Integer, primary_key=True),
+              Column('sid', Integer, ForeignKey('some_other_table.id')),
+              schema='test_schema'
+              )
+        Table('some_other_table', metadata,
+              Column('id', Integer, primary_key=True),
+              schema=None
+              )
+        metadata.create_all()
+        with testing.db.connect() as conn:
+            meta2 = MetaData(conn, schema="test_schema")
+            meta2.reflect()
+
+            eq_(set(meta2.tables), set(
+                ['some_other_table', 'test_schema.some_table']))
+
+    @testing.provide_metadata
     def test_uppercase_lowercase_table(self):
         metadata = self.metadata
 
@@ -673,6 +696,7 @@ class ReflectionTest(fixtures.TestBase):
         eq_(ind, [{'unique': False, 'column_names': ['y'], 'name': 'idx1'}])
         conn.close()
 
+    @testing.fails_if("postgresql < 8.2", "reloptions not supported")
     @testing.provide_metadata
     def test_index_reflection_with_storage_options(self):
         """reflect indexes with storage options set"""

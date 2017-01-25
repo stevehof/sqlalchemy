@@ -1,11 +1,11 @@
 # ext/mutable.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
-"""Provide support for tracking of in-place changes to scalar values,
+r"""Provide support for tracking of in-place changes to scalar values,
 which are propagated into ORM change events on owning parent objects.
 
 .. versionadded:: 0.7 :mod:`sqlalchemy.ext.mutable` replaces SQLAlchemy's
@@ -46,7 +46,7 @@ with any type whose target Python type may be mutable, including
 :class:`.PickleType`, :class:`.postgresql.ARRAY`, etc.
 
 When using the :mod:`sqlalchemy.ext.mutable` extension, the value itself
-tracks all parents which reference it.  Below, we illustrate the a simple
+tracks all parents which reference it.  Below, we illustrate a simple
 version of the :class:`.MutableDict` dictionary object, which applies
 the :class:`.Mutable` mixin to a plain Python dictionary::
 
@@ -252,8 +252,8 @@ and to also route attribute set events via ``__setattr__`` to the
             return self.x, self.y
 
         def __eq__(self, other):
-            return isinstance(other, Point) and \\
-                other.x == self.x and \\
+            return isinstance(other, Point) and \
+                other.x == self.x and \
                 other.y == self.y
 
         def __ne__(self, other):
@@ -635,6 +635,18 @@ _setup_composite_listener()
 class MutableDict(Mutable, dict):
     """A dictionary type that implements :class:`.Mutable`.
 
+    The :class:`.MutableDict` object implements a dictionary that will
+    emit change events to the underlying mapping when the contents of
+    the dictionary are altered, including when values are added or removed.
+
+    Note that :class:`.MutableDict` does **not** apply mutable tracking to  the
+    *values themselves* inside the dictionary. Therefore it is not a sufficient
+    solution for the use case of tracking deep changes to a *recursive*
+    dictionary structure, such as a JSON structure.  To support this use case,
+    build a subclass of  :class:`.MutableDict` that provides appropriate
+    coersion to the values placed in the dictionary so that they too are
+    "mutable", and emit events up to their parent structure.
+
     .. versionadded:: 0.8
 
     """
@@ -657,6 +669,16 @@ class MutableDict(Mutable, dict):
     def update(self, *a, **kw):
         dict.update(self, *a, **kw)
         self.changed()
+
+    def pop(self, *arg):
+        result = dict.pop(self, *arg)
+        self.changed()
+        return result
+
+    def popitem(self):
+        result = dict.popitem(self)
+        self.changed()
+        return result
 
     def clear(self):
         dict.clear(self)

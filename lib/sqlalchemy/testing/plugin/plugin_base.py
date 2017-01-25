@@ -1,5 +1,5 @@
 # plugin/plugin_base.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -40,7 +40,6 @@ file_config = None
 
 
 logging = None
-db_opts = {}
 include_tags = set()
 exclude_tags = set()
 options = None
@@ -68,6 +67,9 @@ def setup_options(make_option):
                 dest="low_connections",
                 help="Use a low number of distinct connections - "
                 "i.e. for Oracle TNS")
+    make_option("--write-idents", type="string", dest="write_idents",
+                help="write out generated follower idents to <file>, "
+                "when -n<num> is used")
     make_option("--reversetop", action="store_true",
                 dest="reversetop", default=False,
                 help="Use a random-ordering set implementation in the ORM "
@@ -115,7 +117,6 @@ def memoize_important_follower_config(dict_):
 
     """
     dict_['memoized_config'] = {
-        'db_opts': db_opts,
         'include_tags': include_tags,
         'exclude_tags': exclude_tags
     }
@@ -127,8 +128,7 @@ def restore_important_follower_config(dict_):
     This invokes in the follower process.
 
     """
-    global db_opts, include_tags, exclude_tags
-    db_opts.update(dict_['memoized_config']['db_opts'])
+    global include_tags, exclude_tags
     include_tags.update(dict_['memoized_config']['include_tags'])
     exclude_tags.update(dict_['memoized_config']['exclude_tags'])
 
@@ -268,7 +268,7 @@ def _engine_uri(options, file_config):
 
     for db_url in db_urls:
         cfg = provision.setup_config(
-            db_url, db_opts, options, file_config, provision.FOLLOWER_IDENT)
+            db_url, options, file_config, provision.FOLLOWER_IDENT)
 
         if not config._current:
             cfg.set_as_current(cfg, testing)
@@ -430,9 +430,11 @@ def stop_test_class(cls):
     #from sqlalchemy import inspect
     #assert not inspect(testing.db).get_table_names()
     engines.testing_reaper._stop_test_ctx()
-    if not options.low_connections:
-        assertions.global_cleanup_assertions()
-    _restore_engine()
+    try:
+        if not options.low_connections:
+            assertions.global_cleanup_assertions()
+    finally:
+        _restore_engine()
 
 
 def _restore_engine():

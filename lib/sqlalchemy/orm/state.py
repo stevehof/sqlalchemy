@@ -1,5 +1,5 @@
 # orm/state.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -194,7 +194,7 @@ class InstanceState(interfaces.InspectionAttr):
         Returns ``None`` if the object has no primary key identity.
 
         .. note::
-            An object which is transient or pending
+            An object which is :term:`transient` or :term:`pending`
             does **not** have a mapped identity until it is flushed,
             even if its attributes include primary key values.
 
@@ -294,7 +294,7 @@ class InstanceState(interfaces.InspectionAttr):
             return {}
 
     def _initialize_instance(*mixed, **kwargs):
-        self, instance, args = mixed[0], mixed[1], mixed[2:]
+        self, instance, args = mixed[0], mixed[1], mixed[2:]  # noqa
         manager = self.manager
 
         manager.dispatch.init(self, args, kwargs)
@@ -373,12 +373,6 @@ class InstanceState(interfaces.InspectionAttr):
                 deserialize(state_dict['load_path'])
 
         state_dict['manager'](self, inst, state_dict)
-
-    def _initialize(self, key):
-        """Set this attribute to an empty value or collection,
-           based on the AttributeImpl in use."""
-
-        self.manager.get_impl(key).initialize(self, self.dict)
 
     def _reset(self, dict_, key):
         """Remove the given attribute and any

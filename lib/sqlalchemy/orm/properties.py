@@ -1,5 +1,5 @@
 # orm/properties.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -39,10 +39,10 @@ class ColumnProperty(StrategizedProperty):
         'instrument', 'comparator_factory', 'descriptor', 'extension',
         'active_history', 'expire_on_flush', 'info', 'doc',
         'strategy_class', '_creation_order', '_is_polymorphic_discriminator',
-        '_mapped_by_synonym', '_deferred_loader')
+        '_mapped_by_synonym', '_deferred_column_loader')
 
     def __init__(self, *columns, **kwargs):
-        """Provide a column-level property for use with a Mapper.
+        r"""Provide a column-level property for use with a Mapper.
 
         Column-based properties can normally be applied to the mapper's
         ``properties`` dictionary using the :class:`.Column` element directly.
@@ -245,6 +245,8 @@ class ColumnProperty(StrategizedProperty):
             if self.adapter:
                 return self.adapter(self.prop.columns[0])
             else:
+                # no adapter, so we aren't aliased
+                # assert self._parententity is self._parentmapper
                 return self.prop.columns[0]._annotate({
                     "parententity": self._parententity,
                     "parentmapper": self._parententity})

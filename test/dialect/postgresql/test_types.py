@@ -559,6 +559,14 @@ class NumericInterpretationTest(fixtures.TestBase):
         )
 
 
+class PythonTypeTest(fixtures.TestBase):
+    def test_interval(self):
+        is_(
+            postgresql.INTERVAL().python_type,
+            datetime.timedelta
+        )
+
+
 class TimezoneTest(fixtures.TestBase):
     __backend__ = True
 
@@ -699,7 +707,6 @@ class TimePrecisionTest(fixtures.TestBase, AssertsCompiledSQL):
 
 
 class ArrayTest(fixtures.TablesTest, AssertsExecutionResults):
-
     __only_on__ = 'postgresql'
     __backend__ = True
     __unsupported_on__ = 'postgresql+pg8000', 'postgresql+zxjdbc'
@@ -787,13 +794,22 @@ class ArrayTest(fixtures.TablesTest, AssertsExecutionResults):
 
     def test_array_comparison(self):
         arrtable = self.tables.arrtable
-        arrtable.insert().execute(intarr=[1, 2, 3],
+        arrtable.insert().execute(id=5, intarr=[1, 2, 3],
                     strarr=[util.u('abc'), util.u('def')])
         results = select([arrtable.c.id]).\
                         where(arrtable.c.intarr < [4, 5, 6]).execute()\
                         .fetchall()
         eq_(len(results), 1)
-        eq_(results[0][0], 3)
+        eq_(results[0][0], 5)
+
+    def test_contains_override_raises(self):
+        col = Column('x', postgresql.ARRAY(Integer))
+
+        assert_raises_message(
+            NotImplementedError,
+            "Operator 'contains' is not supported on this expression",
+            lambda: 'foo' in col
+        )
 
     def test_array_subtype_resultprocessor(self):
         arrtable = self.tables.arrtable
@@ -1050,6 +1066,16 @@ class TimestampTest(fixtures.TestBase, AssertsExecutionResults):
         s = select([text("timestamp '2007-12-25'")])
         result = connection.execute(s).first()
         eq_(result[0], datetime.datetime(2007, 12, 25, 0, 0))
+
+    def test_interval_arithmetic(self):
+        # basically testing that we get timedelta back for an INTERVAL
+        # result.  more of a driver assertion.
+        engine = testing.db
+        connection = engine.connect()
+
+        s = select([text("timestamp '2007-12-25' - timestamp '2007-11-15'")])
+        result = connection.execute(s).first()
+        eq_(result[0], datetime.timedelta(40))
 
 
 class SpecialTypesTest(fixtures.TestBase, ComparesTables, AssertsCompiledSQL):
@@ -1314,7 +1340,7 @@ class HStoreTest(AssertsCompiledSQL, fixtures.TestBase):
         assert_raises_message(
             ValueError,
             r'''After u?'\[\.\.\.\], "key1"=>"value1", ', could not parse '''
-            '''residual at position 36: u?'crapcrapcrap, "key3"\[\.\.\.\]''',
+            r'''residual at position 36: u?'crapcrapcrap, "key3"\[\.\.\.\]''',
             proc,
             '"key2"=>"value2", "key1"=>"value1", '
             'crapcrapcrap, "key3"=>"value3"'

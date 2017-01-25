@@ -45,7 +45,7 @@ defaults)::
 Python-Executed Functions
 -------------------------
 
-The ``default`` and ``onupdate`` keyword arguments also accept Python
+The :paramref:`.Column.default` and :paramref:`.Column.onupdate` keyword arguments also accept Python
 functions. These functions are invoked at the time of insert or update if no
 other value for that column is supplied, and the value returned is used for
 the column's value. Below illustrates a crude "sequence" that assigns an
@@ -67,12 +67,12 @@ built-in capabilities of the database should normally be used, which may
 include sequence objects or other autoincrementing capabilities. For primary
 key columns, SQLAlchemy will in most cases use these capabilities
 automatically. See the API documentation for
-:class:`~sqlalchemy.schema.Column` including the ``autoincrement`` flag, as
+:class:`~sqlalchemy.schema.Column` including the :paramref:`.Column.autoincrement` flag, as
 well as the section on :class:`~sqlalchemy.schema.Sequence` later in this
 chapter for background on standard primary key generation techniques.
 
 To illustrate onupdate, we assign the Python ``datetime`` function ``now`` to
-the ``onupdate`` attribute::
+the :paramref:`.Column.onupdate` attribute::
 
     import datetime
 
@@ -93,7 +93,7 @@ executes.
 Context-Sensitive Default Functions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The Python functions used by ``default`` and ``onupdate`` may also make use of
+The Python functions used by :paramref:`.Column.default` and :paramref:`.Column.onupdate` may also make use of
 the current statement's context in order to determine a value. The `context`
 of a statement is an internal SQLAlchemy object which contains all information
 about the statement being executed, including its source expression, the
@@ -185,21 +185,23 @@ performance reasons.
 When the statement is executed with a single set of parameters (that is, it is
 not an "executemany" style execution), the returned
 :class:`~sqlalchemy.engine.ResultProxy` will contain a collection
-accessible via ``result.postfetch_cols()`` which contains a list of all
+accessible via :meth:`.ResultProxy.postfetch_cols` which contains a list of all
 :class:`~sqlalchemy.schema.Column` objects which had an inline-executed
 default. Similarly, all parameters which were bound to the statement,
 including all Python and SQL expressions which were pre-executed, are present
-in the ``last_inserted_params()`` or ``last_updated_params()`` collections on
-:class:`~sqlalchemy.engine.ResultProxy`. The ``inserted_primary_key``
+in the :meth:`.ResultProxy.last_inserted_params` or :meth:`.ResultProxy.last_updated_params` collections on
+:class:`~sqlalchemy.engine.ResultProxy`. The :attr:`.ResultProxy.inserted_primary_key`
 collection contains a list of primary key values for the row inserted (a list
 so that single-column and composite-column primary keys are represented in the
 same format).
 
+.. _server_defaults:
+
 Server Side Defaults
 --------------------
 
-A variant on the SQL expression default is the ``server_default``, which gets
-placed in the CREATE TABLE statement during a ``create()`` operation:
+A variant on the SQL expression default is the :paramref:`.Column.server_default`, which gets
+placed in the CREATE TABLE statement during a :meth:`.Table.create` operation:
 
 .. sourcecode:: python+sql
 
@@ -215,7 +217,7 @@ A create call for the above table will produce::
         created_at datetime default sysdate
     )
 
-The behavior of ``server_default`` is similar to that of a regular SQL
+The behavior of :paramref:`.Column.server_default` is similar to that of a regular SQL
 default; if it's placed on a primary key column for a database which doesn't
 have a way to "postfetch" the ID, and the statement is not "inlined", the SQL
 expression is pre-executed; otherwise, SQLAlchemy lets the default fire off on
@@ -234,11 +236,6 @@ called out using :class:`.FetchedValue` as a marker::
         Column('abc', String(20), server_default=FetchedValue()),
         Column('def', String(20), server_onupdate=FetchedValue())
     )
-
-.. versionchanged:: 0.8.0b2,0.7.10
-    The ``for_update`` argument on :class:`.FetchedValue` is set automatically
-    when specified as the ``server_onupdate`` argument.  If using an older version,
-    specify the onupdate above as ``server_onupdate=FetchedValue(for_update=True)``.
 
 These markers do not emit a "default" clause when the table is created,
 however they do set the same internal flags as a static ``server_default``
@@ -337,7 +334,7 @@ the SQL commandline, we can use the :paramref:`.Column.server_default`
 parameter in conjunction with the value-generation function of the
 sequence, available from the :meth:`.Sequence.next_value` method::
 
-    cart_id_seq = Sequence('cart_id_seq')
+    cart_id_seq = Sequence('cart_id_seq', metadata=meta)
     table = Table("cartitems", meta,
         Column(
             "cart_id", Integer, cart_id_seq,
@@ -346,7 +343,32 @@ sequence, available from the :meth:`.Sequence.next_value` method::
         Column("createdate", DateTime())
     )
 
-The above metadata will generate a CREATE TABLE statement on Postgresql as::
+or with the ORM::
+
+    class CartItem(Base):
+        __tablename__ = 'cartitems'
+
+        cart_id_seq = Sequence('cart_id_seq', metadata=Base.metadata)
+        cart_id = Column(
+            Integer, cart_id_seq,
+            server_default=cart_id_seq.next_value(), primary_key=True)
+        description = Column(String(40))
+        createdate = Column(DateTime)
+
+In the above two examples, we set the :paramref:`.Sequence.metadata` parameter
+of the :class:`.Sequence` object to refer to the same :class:`.MetaData` object
+as that of the :class:`.Table`. The purpose of this is so that when we invoke
+:meth:`.MetaData.create_all`, the "CREATE SEQUENCE" statement will be emitted
+for the :class:`.Sequence`::
+
+    CREATE SEQUENCE cart_id_seq
+
+Alternatively, we can emit the "CREATE SEQUENCE" using the :class:`.Sequence`
+object itself as in ``cart_id_seq.create(engine)``, in the same way as
+:meth:`.Table.create`.
+
+When the "CREATE TABLE" statement is emitted, on PostgreSQL it would be
+emitted as::
 
     CREATE TABLE cartitems (
         cart_id INTEGER DEFAULT nextval('cart_id_seq') NOT NULL,
@@ -355,15 +377,38 @@ The above metadata will generate a CREATE TABLE statement on Postgresql as::
         PRIMARY KEY (cart_id)
     )
 
-We place the :class:`.Sequence` also as a Python-side default above, that
-is, it is mentioned twice in the :class:`.Column` definition.   Depending
-on the backend in use, this may not be strictly necessary, for example
-on the Postgresql backend the Core will use ``RETURNING`` to access the
-newly generated primary key value in any case.   However, for the best
-compatibility, :class:`.Sequence` was originally intended to be a Python-side
-directive first and foremost so it's probably a good idea to specify it
-in this way as well.
+In the definition for the :class:`.Column`, the above examples
+illustrate placement of the :class:`.Sequence` twice in the definition
+in two different contexts;
+as both a client side default generator object as well as a server
+side default::
 
+    Column(
+        "cart_id", Integer, cart_id_seq,
+        server_default=cart_id_seq.next_value(),
+        primary_key=True)
+
+Placing the :class:`.Sequence` as the "client side" default means that when the
+Core or ORM runs a :class:`.Insert` construct, it will either pre-invoke the
+:class:`.Sequence` and use the new value in the subsequent INSERT statement, or
+more commonly will render an invocation of the sequence explicitly within the
+INSERT statement itself, in conjunction with the use of RETURNING to get the
+newly generated value from the statement, assuming that this column is part of
+the table's primary key.   Assuming that RETURNING is available and enabled, it
+doesn't matter whether the :class:`.Sequence` is specified as a "client side"
+default in addition to :paramref:`.Column.server_default`, or only as
+:paramref:`.Column.server_default`.  RETURNING is normally used on the
+PostgreSQL and Oracle backends for single-row INSERT statements in order to
+retrieve newly created primary key values, so in most cases the "client side"
+setting isn't needed, however including :class:`.Sequence` as an explicit
+default generation object will allow the best compatibility, as
+:class:`.Sequence` was originally designed to be used in this way.
+
+.. seealso::
+
+    :ref:`postgresql_sequences` - in the Postgresql dialect documentation
+
+    :ref:`oracle_returning` - in the Oracle dialect documentation
 
 Default Objects API
 -------------------

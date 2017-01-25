@@ -1,5 +1,5 @@
 # testing/__init__.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -21,7 +21,8 @@ def against(*queries):
 from .assertions import emits_warning, emits_warning_on, uses_deprecated, \
     eq_, ne_, le_, is_, is_not_, startswith_, assert_raises, \
     assert_raises_message, AssertsCompiledSQL, ComparesTables, \
-    AssertsExecutionResults, expect_deprecated, expect_warnings
+    AssertsExecutionResults, expect_deprecated, expect_warnings, \
+    in_, not_in_, is_true
 
 from .util import run_as_contextmanager, rowset, fail, \
     provide_metadata, adict, force_drop_names, \

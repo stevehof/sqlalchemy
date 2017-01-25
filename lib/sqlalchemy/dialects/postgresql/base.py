@@ -1,14 +1,15 @@
 # postgresql/base.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
-"""
+r"""
 .. dialect:: postgresql
     :name: PostgreSQL
 
+.. _postgresql_sequences:
 
 Sequences/SERIAL
 ----------------
@@ -50,11 +51,12 @@ Transaction Isolation Level
 All Postgresql dialects support setting of transaction isolation level
 both via a dialect-specific parameter :paramref:`.create_engine.isolation_level`
 accepted by :func:`.create_engine`,
-as well as the ``isolation_level`` argument as passed to
+as well as the :paramref:`.Connection.execution_options.isolation_level` argument as passed to
 :meth:`.Connection.execution_options`.  When using a non-psycopg2 dialect,
 this feature works by issuing the command
 ``SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL <level>`` for
-each new connection.
+each new connection.  For the special AUTOCOMMIT isolation level, DBAPI-specific
+techniques are used.
 
 To set isolation level using :func:`.create_engine`::
 
@@ -76,10 +78,7 @@ Valid values for ``isolation_level`` include:
 * ``READ UNCOMMITTED``
 * ``REPEATABLE READ``
 * ``SERIALIZABLE``
-
-The :mod:`~sqlalchemy.dialects.postgresql.psycopg2` and
-:mod:`~sqlalchemy.dialects.postgresql.pg8000` dialects also offer the
-special level ``AUTOCOMMIT``.
+* ``AUTOCOMMIT`` - on psycopg2 / pg8000 only
 
 .. seealso::
 
@@ -102,7 +101,7 @@ via foreign key constraint, a decision must be made as to how the ``.schema``
 is represented in those remote tables, in the case where that remote
 schema name is also a member of the current
 `Postgresql search path
-<http://www.postgresql.org/docs/9.0/static/ddl-schemas.html#DDL-SCHEMAS-PATH>`_.
+<http://www.postgresql.org/docs/current/static/ddl-schemas.html#DDL-SCHEMAS-PATH>`_.
 
 By default, the Postgresql dialect mimics the behavior encouraged by
 Postgresql's own ``pg_get_constraintdef()`` builtin procedure.  This function
@@ -235,17 +234,17 @@ primary key identifiers.   To specify an explicit ``RETURNING`` clause,
 use the :meth:`._UpdateBase.returning` method on a per-statement basis::
 
     # INSERT..RETURNING
-    result = table.insert().returning(table.c.col1, table.c.col2).\\
+    result = table.insert().returning(table.c.col1, table.c.col2).\
         values(name='foo')
     print result.fetchall()
 
     # UPDATE..RETURNING
-    result = table.update().returning(table.c.col1, table.c.col2).\\
+    result = table.update().returning(table.c.col1, table.c.col2).\
         where(table.c.name=='foo').values(name='bar')
     print result.fetchall()
 
     # DELETE..RETURNING
-    result = table.delete().returning(table.c.col1, table.c.col2).\\
+    result = table.delete().returning(table.c.col1, table.c.col2).\
         where(table.c.name=='foo')
     print result.fetchall()
 
@@ -362,7 +361,7 @@ Partial indexes add criterion to the index definition so that the index is
 applied to a subset of rows.   These can be specified on :class:`.Index`
 using the ``postgresql_where`` keyword argument::
 
-  Index('my_index', my_table.c.id, postgresql_where=tbl.c.value > 10)
+  Index('my_index', my_table.c.id, postgresql_where=my_table.c.value > 10)
 
 Operator Classes
 ^^^^^^^^^^^^^^^^^
@@ -432,6 +431,26 @@ The above index construct will render SQL as::
     CREATE INDEX CONCURRENTLY test_idx1 ON testtbl (data)
 
 .. versionadded:: 0.9.9
+
+When using CONCURRENTLY, the Postgresql database requires that the statement
+be invoked outside of a transaction block.   The Python DBAPI enforces that
+even for a single statement, a transaction is present, so to use this
+construct, the DBAPI's "autocommit" mode must be used::
+
+    metadata = MetaData()
+    table = Table(
+        "foo", metadata,
+        Column("id", String))
+    index = Index(
+        "foo_idx", table.c.id, postgresql_concurrently=True)
+
+    with engine.connect() as conn:
+        with conn.execution_options(isolation_level='AUTOCOMMIT'):
+            table.create(conn)
+
+.. seealso::
+
+    :ref:`postgresql_isolation_level`
 
 .. _postgresql_index_reflection:
 
@@ -506,7 +525,7 @@ dialect in conjunction with the :class:`.Table` construct:
 .. seealso::
 
     `Postgresql CREATE TABLE options
-    <http://www.postgresql.org/docs/9.3/static/sql-createtable.html>`_
+    <http://www.postgresql.org/docs/current/static/sql-createtable.html>`_
 
 ENUM Types
 ----------
@@ -524,9 +543,75 @@ entity.   The following sections should be consulted:
 * :meth:`.postgresql.ENUM.create` , :meth:`.postgresql.ENUM.drop` - individual
   CREATE and DROP commands for ENUM.
 
+.. _postgresql_array_of_enum:
+
+Using ENUM with ARRAY
+^^^^^^^^^^^^^^^^^^^^^
+
+The combination of ENUM and ARRAY is not directly supported by backend
+DBAPIs at this time.   In order to send and receive an ARRAY of ENUM,
+use the following workaround type::
+
+    class ArrayOfEnum(ARRAY):
+
+        def bind_expression(self, bindvalue):
+            return sa.cast(bindvalue, self)
+
+        def result_processor(self, dialect, coltype):
+            super_rp = super(ArrayOfEnum, self).result_processor(
+                dialect, coltype)
+
+            def handle_raw_string(value):
+                inner = re.match(r"^{(.*)}$", value).group(1)
+                return inner.split(",") if inner else []
+
+            def process(value):
+                if value is None:
+                    return None
+                return super_rp(handle_raw_string(value))
+            return process
+
+E.g.::
+
+    Table(
+        'mydata', metadata,
+        Column('id', Integer, primary_key=True),
+        Column('data', ArrayOfEnum(ENUM('a', 'b, 'c', name='myenum')))
+
+    )
+
+This type is not included as a built-in type as it would be incompatible
+with a DBAPI that suddenly decides to support ARRAY of ENUM directly in
+a new version.
+
+.. _postgresql_array_of_json:
+
+Using JSON/JSONB with ARRAY
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Similar to using ENUM, for an ARRAY of JSON/JSONB we need to render the
+appropriate CAST, however current psycopg2 drivers seem to handle the result
+for ARRAY of JSON automatically, so the type is simpler::
+
+
+    class CastingArray(ARRAY):
+        def bind_expression(self, bindvalue):
+            return sa.cast(bindvalue, self)
+
+E.g.::
+
+    Table(
+        'mydata', metadata,
+        Column('id', Integer, primary_key=True),
+        Column('data', CastingArray(JSONB))
+    )
+
+
 """
 from collections import defaultdict
 import re
+import datetime as dt
+
 
 from ... import sql, schema, exc, util
 from ...engine import default, reflection
@@ -632,6 +717,10 @@ class INTERVAL(sqltypes.TypeEngine):
     @property
     def _type_affinity(self):
         return sqltypes.Interval
+
+    @property
+    def python_type(self):
+        return dt.timedelta
 
 PGInterval = INTERVAL
 
@@ -883,6 +972,16 @@ class ARRAY(sqltypes.Concatenable, sqltypes.TypeEngine):
             mytable.c.data[2:7]: [1, 2, 3]
         })
 
+    .. note::
+
+        Multi-dimensional support for the ``[]`` operator is not supported
+        in SQLAlchemy 1.0.  Please use the :func:`.type_coerce` function
+        to cast an intermediary expression to ARRAY again as a workaround::
+
+            expr = type_coerce(my_array_column[5], ARRAY(Integer))[6]
+
+        Multi-dimensional support will be provided in a future release.
+
     :class:`.ARRAY` provides special methods for containment operations,
     e.g.::
 
@@ -896,6 +995,10 @@ class ARRAY(sqltypes.Concatenable, sqltypes.TypeEngine):
 
     The :class:`.ARRAY` type may not be supported on all DBAPIs.
     It is known to work on psycopg2 and not pg8000.
+
+    Additionally, the :class:`.ARRAY` type does not work directly in
+    conjunction with the :class:`.ENUM` type.  For a workaround, see the
+    special type at :ref:`postgresql_array_of_enum`.
 
     See also:
 
@@ -1485,7 +1588,7 @@ class PGCompiler(compiler.SQLCompiler):
                 c.table if isinstance(c, expression.ColumnClause)
                 else c for c in select._for_update_arg.of)
             tmp += " OF " + ", ".join(
-                self.process(table, ashint=True, **kw)
+                self.process(table, ashint=True, use_schema=False, **kw)
                 for table in tables
             )
 
@@ -1519,6 +1622,9 @@ class PGDDLCompiler(compiler.DDLCompiler):
 
         colspec = self.preparer.format_column(column)
         impl_type = column.type.dialect_impl(self.dialect)
+        if isinstance(impl_type, sqltypes.TypeDecorator):
+            impl_type = impl_type.impl
+
         if column.primary_key and \
             column is column.table._autoincrement_column and \
             (
@@ -2169,8 +2275,8 @@ class PGDialect(default.DefaultDialect):
     def _get_server_version_info(self, connection):
         v = connection.execute("select version()").scalar()
         m = re.match(
-            '.*(?:PostgreSQL|EnterpriseDB) '
-            '(\d+)\.(\d+)(?:\.(\d+))?(?:\.\d+)?(?:devel)?',
+            r'.*(?:PostgreSQL|EnterpriseDB) '
+            r'(\d+)\.(\d+)(?:\.(\d+))?(?:\.\d+)?(?:devel)?',
             v)
         if not m:
             raise AssertionError(
@@ -2363,12 +2469,12 @@ class PGDialect(default.DefaultDialect):
 
         nullable = not notnull
         is_array = format_type.endswith('[]')
-        charlen = re.search('\(([\d,]+)\)', format_type)
+        charlen = re.search(r'\(([\d,]+)\)', format_type)
         if charlen:
             charlen = charlen.group(1)
-        args = re.search('\((.*)\)', format_type)
+        args = re.search(r'\((.*)\)', format_type)
         if args and args.group(1):
-            args = tuple(re.split('\s*,\s*', args.group(1)))
+            args = tuple(re.split(r'\s*,\s*', args.group(1)))
         else:
             args = ()
         kwargs = {}
@@ -2631,7 +2737,7 @@ class PGDialect(default.DefaultDialect):
                   i.relname as relname,
                   ix.indisunique, ix.indexprs, ix.indpred,
                   a.attname, a.attnum, NULL, ix.indkey%s,
-                  i.reloptions, am.amname
+                  %s, am.amname
               FROM
                   pg_class t
                         join pg_index ix on t.oid = ix.indrelid
@@ -2654,6 +2760,8 @@ class PGDialect(default.DefaultDialect):
                 # cast does not work in PG 8.2.4, does work in 8.3.0.
                 # nothing in PG changelogs regarding this.
                 "::varchar" if self.server_version_info >= (8, 3) else "",
+                "i.reloptions" if self.server_version_info >= (8, 2)
+                else "NULL",
                 self._pg_index_any("a.attnum", "ix.indkey")
             )
         else:
@@ -2858,7 +2966,7 @@ class PGDialect(default.DefaultDialect):
         domains = {}
         for domain in c.fetchall():
             # strip (30) from character varying(30)
-            attype = re.search('([^\(]+)', domain['attype']).group(1)
+            attype = re.search(r'([^\(]+)', domain['attype']).group(1)
             if domain['visible']:
                 # 'visible' just means whether or not the domain is in a
                 # schema that's on the search path -- or not overridden by

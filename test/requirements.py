@@ -286,6 +286,10 @@ class DefaultRequirements(SuiteRequirements):
                     ("mysql", "<", (5, 0, 3)),
                     ], "savepoints not supported")
 
+    @property
+    def savepoints_w_release(self):
+        return self.savepoints + skip_if(
+            "oracle", "oracle doesn't support release of savepoint")
 
     @property
     def schemas(self):
@@ -389,9 +393,20 @@ class DefaultRequirements(SuiteRequirements):
             no_support('postgresql+zxjdbc',
                     'FIXME: JDBC driver confuses the transaction state, may '
                        'need separate XA implementation'),
-            exclude('mysql', '<', (5, 0, 3),
-                        'two-phase xact not supported by database'),
+            no_support('mysql',
+                'recent MySQL communiity editions have too many issues '
+                '(late 2016), disabling for now'),
             ])
+
+    @property
+    def two_phase_recovery(self):
+        return self.two_phase_transactions + (
+            skip_if(
+               "mysql",
+               "crashes on most mariadb and mysql versions"
+            )
+        )
+
 
     @property
     def views(self):
@@ -841,8 +856,28 @@ class DefaultRequirements(SuiteRequirements):
         return skip_if(["oracle", "firebird"], "non-standard SELECT scalar syntax")
 
     @property
+    def mysql_fsp(self):
+        return only_if('mysql >= 5.6.4')
+
+    @property
     def mysql_fully_case_sensitive(self):
         return only_if(self._has_mysql_fully_case_sensitive)
+
+    @property
+    def mysql_zero_date(self):
+        def check(config):
+             row = config.db.execute("show variables like 'sql_mode'").first()
+             return not row or "NO_ZERO_DATE" not in row[1]
+
+        return only_if(check)
+
+    @property
+    def mysql_non_strict(self):
+        def check(config):
+             row = config.db.execute("show variables like 'sql_mode'").first()
+             return not row or "STRICT" not in row[1]
+
+        return only_if(check)
 
     def _has_mysql_on_windows(self, config):
         return against(config, 'mysql') and \

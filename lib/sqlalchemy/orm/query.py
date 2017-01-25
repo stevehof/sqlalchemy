@@ -1,5 +1,5 @@
 # orm/query.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -287,6 +287,8 @@ class Query(object):
         return self._entities[0]
 
     def _mapper_zero(self):
+        # TODO: self._select_from_entity is not a mapper
+        # so this method is misnamed
         return self._select_from_entity \
             if self._select_from_entity is not None \
             else self._entity_zero().entity_zero
@@ -471,7 +473,7 @@ class Query(object):
         return q.alias(name=name)
 
     def cte(self, name=None, recursive=False):
-        """Return the full SELECT statement represented by this
+        r"""Return the full SELECT statement represented by this
         :class:`.Query` represented as a common table expression (CTE).
 
         .. versionadded:: 0.7.6
@@ -501,8 +503,8 @@ class Query(object):
             included_parts = session.query(
                             Part.sub_part,
                             Part.part,
-                            Part.quantity).\\
-                                filter(Part.part=="our part").\\
+                            Part.quantity).\
+                                filter(Part.part=="our part").\
                                 cte(name="included_parts", recursive=True)
 
             incl_alias = aliased(included_parts, name="pr")
@@ -511,7 +513,7 @@ class Query(object):
                 session.query(
                     parts_alias.sub_part,
                     parts_alias.part,
-                    parts_alias.quantity).\\
+                    parts_alias.quantity).\
                         filter(parts_alias.part==incl_alias.c.sub_part)
                 )
 
@@ -519,7 +521,7 @@ class Query(object):
                     included_parts.c.sub_part,
                     func.sum(included_parts.c.quantity).
                         label('total_quantity')
-                ).\\
+                ).\
                 group_by(included_parts.c.sub_part)
 
         .. seealso::
@@ -607,6 +609,16 @@ class Query(object):
 
         When the `Query` actually issues SQL to load rows, it always
         uses column labeling.
+
+        .. note:: The :meth:`.Query.with_labels` method *only* applies
+           the output of :attr:`.Query.statement`, and *not* to any of
+           the result-row invoking systems of :class:`.Query` itself, e.g.
+           :meth:`.Query.first`, :meth:`.Query.all`, etc.   To execute
+           a query using :meth:`.Query.with_labels`, invoke the
+           :attr:`.Query.statement` using :meth:`.Session.execute`::
+
+                result = session.execute(query.with_labels().statement)
+
 
         """
         self._with_labels = True
@@ -698,7 +710,7 @@ class Query(object):
 
     @_generative()
     def yield_per(self, count):
-        """Yield only ``count`` rows at a time.
+        r"""Yield only ``count`` rows at a time.
 
         The purpose of this method is when fetching very large result sets
         (> 10K rows), to batch results in sub-collections and yield them
@@ -720,7 +732,7 @@ class Query(object):
         Or more selectively using :func:`.lazyload`; such as with
         an asterisk to specify the default loader scheme::
 
-            q = sess.query(Object).yield_per(100).\\
+            q = sess.query(Object).yield_per(100).\
                 options(lazyload('*'), joinedload(Object.some_related))
 
         .. warning::
@@ -930,11 +942,13 @@ class Query(object):
         """
 
         if property is None:
+            mapper_zero = inspect(self._mapper_zero()).mapper
+
             mapper = object_mapper(instance)
 
             for prop in mapper.iterate_properties:
                 if isinstance(prop, properties.RelationshipProperty) and \
-                        prop.mapper is self._mapper_zero():
+                        prop.mapper is mapper_zero:
                     property = prop
                     break
             else:
@@ -969,11 +983,172 @@ class Query(object):
         self.session = session
 
     def from_self(self, *entities):
-        """return a Query that selects from this Query's
+        r"""return a Query that selects from this Query's
         SELECT statement.
 
-        \*entities - optional list of entities which will replace
-        those being selected.
+        :meth:`.Query.from_self` essentially turns the SELECT statement
+        into a SELECT of itself.  Given a query such as::
+
+            q = session.query(User).filter(User.name.like('e%'))
+
+        Given the :meth:`.Query.from_self` version::
+
+            q = session.query(User).filter(User.name.like('e%')).from_self()
+
+        This query renders as:
+
+        .. sourcecode:: sql
+
+            SELECT anon_1.user_id AS anon_1_user_id,
+                   anon_1.user_name AS anon_1_user_name
+            FROM (SELECT "user".id AS user_id, "user".name AS user_name
+            FROM "user"
+            WHERE "user".name LIKE :name_1) AS anon_1
+
+        There are lots of cases where :meth:`.Query.from_self` may be useful.
+        A simple one is where above, we may want to apply a row LIMIT to
+        the set of user objects we query against, and then apply additional
+        joins against that row-limited set::
+
+            q = session.query(User).filter(User.name.like('e%')).\
+                limit(5).from_self().\
+                join(User.addresses).filter(Address.email.like('q%'))
+
+        The above query joins to the ``Address`` entity but only against the
+        first five results of the ``User`` query:
+
+        .. sourcecode:: sql
+
+            SELECT anon_1.user_id AS anon_1_user_id,
+                   anon_1.user_name AS anon_1_user_name
+            FROM (SELECT "user".id AS user_id, "user".name AS user_name
+            FROM "user"
+            WHERE "user".name LIKE :name_1
+             LIMIT :param_1) AS anon_1
+            JOIN address ON anon_1.user_id = address.user_id
+            WHERE address.email LIKE :email_1
+
+        **Automatic Aliasing**
+
+        Another key behavior of :meth:`.Query.from_self` is that it applies
+        **automatic aliasing** to the entities inside the subquery, when
+        they are referenced on the outside.  Above, if we continue to
+        refer to the ``User`` entity without any additional aliasing applied
+        to it, those references wil be in terms of the subquery::
+
+            q = session.query(User).filter(User.name.like('e%')).\
+                limit(5).from_self().\
+                join(User.addresses).filter(Address.email.like('q%')).\
+                order_by(User.name)
+
+        The ORDER BY against ``User.name`` is aliased to be in terms of the
+        inner subquery:
+
+        .. sourcecode:: sql
+
+            SELECT anon_1.user_id AS anon_1_user_id,
+                   anon_1.user_name AS anon_1_user_name
+            FROM (SELECT "user".id AS user_id, "user".name AS user_name
+            FROM "user"
+            WHERE "user".name LIKE :name_1
+             LIMIT :param_1) AS anon_1
+            JOIN address ON anon_1.user_id = address.user_id
+            WHERE address.email LIKE :email_1 ORDER BY anon_1.user_name
+
+        The automatic aliasing feature only works in a **limited** way,
+        for simple filters and orderings.   More ambitious constructions
+        such as referring to the entity in joins should prefer to use
+        explicit subquery objects, typically making use of the
+        :meth:`.Query.subquery` method to produce an explicit subquery object.
+        Always test the structure of queries by viewing the SQL to ensure
+        a particular structure does what's expected!
+
+        **Changing the Entities**
+
+        :meth:`.Query.from_self` also includes the ability to modify what
+        columns are being queried.   In our example, we want ``User.id``
+        to be queried by the inner query, so that we can join to the
+        ``Address`` entity on the outside, but we only wanted the outer
+        query to return the ``Address.email`` column::
+
+            q = session.query(User).filter(User.name.like('e%')).\
+                limit(5).from_self(Address.email).\
+                join(User.addresses).filter(Address.email.like('q%'))
+
+        yielding:
+
+        .. sourcecode:: sql
+
+            SELECT address.email AS address_email
+            FROM (SELECT "user".id AS user_id, "user".name AS user_name
+            FROM "user"
+            WHERE "user".name LIKE :name_1
+             LIMIT :param_1) AS anon_1
+            JOIN address ON anon_1.user_id = address.user_id
+            WHERE address.email LIKE :email_1
+
+        **Looking out for Inner / Outer Columns**
+
+        Keep in mind that when referring to columns that originate from
+        inside the subquery, we need to ensure they are present in the
+        columns clause of the subquery itself; this is an ordinary aspect of
+        SQL.  For example, if we wanted to load from a joined entity inside
+        the subquery using :func:`.contains_eager`, we need to add those
+        columns.   Below illustrates a join of ``Address`` to ``User``,
+        then a subquery, and then we'd like :func:`.contains_eager` to access
+        the ``User`` columns::
+
+            q = session.query(Address).join(Address.user).\
+                filter(User.name.like('e%'))
+
+            q = q.add_entity(User).from_self().\
+                options(contains_eager(Address.user))
+
+        We use :meth:`.Query.add_entity` above **before** we call
+        :meth:`.Query.from_self` so that the ``User`` columns are present
+        in the inner subquery, so that they are available to the
+        :func:`.contains_eager` modifier we are using on the outside,
+        producing:
+
+        .. sourcecode:: sql
+
+            SELECT anon_1.address_id AS anon_1_address_id,
+                   anon_1.address_email AS anon_1_address_email,
+                   anon_1.address_user_id AS anon_1_address_user_id,
+                   anon_1.user_id AS anon_1_user_id,
+                   anon_1.user_name AS anon_1_user_name
+            FROM (
+                SELECT address.id AS address_id,
+                address.email AS address_email,
+                address.user_id AS address_user_id,
+                "user".id AS user_id,
+                "user".name AS user_name
+            FROM address JOIN "user" ON "user".id = address.user_id
+            WHERE "user".name LIKE :name_1) AS anon_1
+
+        If we didn't call ``add_entity(User)``, but still asked
+        :func:`.contains_eager` to load the ``User`` entity, it would be
+        forced to add the table on the outside without the correct
+        join criteria - note the ``anon1, "user"`` phrase at
+        the end:
+
+        .. sourcecode:: sql
+
+            -- incorrect query
+            SELECT anon_1.address_id AS anon_1_address_id,
+                   anon_1.address_email AS anon_1_address_email,
+                   anon_1.address_user_id AS anon_1_address_user_id,
+                   "user".id AS user_id,
+                   "user".name AS user_name
+            FROM (
+                SELECT address.id AS address_id,
+                address.email AS address_email,
+                address.user_id AS address_user_id
+            FROM address JOIN "user" ON "user".id = address.user_id
+            WHERE "user".name LIKE :name_1) AS anon_1, "user"
+
+        :param \*entities: optional list of entities which will replace
+         those being selected.
 
         """
         fromclause = self.with_labels().enable_eagerloads(False).\
@@ -1041,18 +1216,18 @@ class Query(object):
 
             # Users, filtered on some arbitrary criterion
             # and then ordered by related email address
-            q = session.query(User).\\
-                        join(User.address).\\
-                        filter(User.name.like('%ed%')).\\
+            q = session.query(User).\
+                        join(User.address).\
+                        filter(User.name.like('%ed%')).\
                         order_by(Address.email)
 
             # given *only* User.id==5, Address.email, and 'q', what
             # would the *next* User in the result be ?
-            subq = q.with_entities(Address.email).\\
-                        order_by(None).\\
-                        filter(User.id==5).\\
+            subq = q.with_entities(Address.email).\
+                        order_by(None).\
+                        filter(User.id==5).\
                         subquery()
-            q = q.join((subq, subq.c.email < Address.email)).\\
+            q = q.join((subq, subq.c.email < Address.email)).\
                         limit(1)
 
         .. versionadded:: 0.6.5
@@ -1253,7 +1428,7 @@ class Query(object):
 
     @_generative()
     def params(self, *args, **kwargs):
-        """add values for bind parameters which may have been
+        r"""add values for bind parameters which may have been
         specified in filter().
 
         parameters may be specified using \**kwargs, or optionally a single
@@ -1273,24 +1448,23 @@ class Query(object):
 
     @_generative(_no_statement_condition, _no_limit_offset)
     def filter(self, *criterion):
-        """apply the given filtering criterion to a copy
+        r"""apply the given filtering criterion to a copy
         of this :class:`.Query`, using SQL expressions.
 
         e.g.::
 
             session.query(MyClass).filter(MyClass.name == 'some name')
 
-        Multiple criteria are joined together by AND::
+        Multiple criteria may be specified as comma separated; the effect
+        is that they will be joined together using the :func:`.and_`
+        function::
 
-            session.query(MyClass).\\
+            session.query(MyClass).\
                 filter(MyClass.name == 'some name', MyClass.id > 5)
 
         The criterion is any SQL expression object applicable to the
         WHERE clause of a select.   String expressions are coerced
         into SQL expression constructs via the :func:`.text` construct.
-
-        .. versionchanged:: 0.7.5
-            Multiple criteria joined by AND.
 
         .. seealso::
 
@@ -1308,16 +1482,18 @@ class Query(object):
                 self._criterion = criterion
 
     def filter_by(self, **kwargs):
-        """apply the given filtering criterion to a copy
+        r"""apply the given filtering criterion to a copy
         of this :class:`.Query`, using keyword expressions.
 
         e.g.::
 
             session.query(MyClass).filter_by(name = 'some name')
 
-        Multiple criteria are joined together by AND::
+        Multiple criteria may be specified as comma separated; the effect
+        is that they will be joined together using the :func:`.and_`
+        function::
 
-            session.query(MyClass).\\
+            session.query(MyClass).\
                 filter_by(name = 'some name', id = 5)
 
         The keyword expressions are extracted from the primary
@@ -1381,7 +1557,7 @@ class Query(object):
 
     @_generative(_no_statement_condition, _no_limit_offset)
     def having(self, criterion):
-        """apply a HAVING criterion to the query and return the
+        r"""apply a HAVING criterion to the query and return the
         newly resulting :class:`.Query`.
 
         :meth:`~.Query.having` is used in conjunction with
@@ -1390,9 +1566,9 @@ class Query(object):
         HAVING criterion makes it possible to use filters on aggregate
         functions like COUNT, SUM, AVG, MAX, and MIN, eg.::
 
-            q = session.query(User.id).\\
-                        join(User.addresses).\\
-                        group_by(User.id).\\
+            q = session.query(User.id).\
+                        join(User.addresses).\
+                        group_by(User.id).\
                         having(func.count(Address.id) > 2)
 
         """
@@ -1509,7 +1685,7 @@ class Query(object):
         )
 
     def join(self, *props, **kwargs):
-        """Create a SQL JOIN against this :class:`.Query` object's criterion
+        r"""Create a SQL JOIN against this :class:`.Query` object's criterion
         and apply generatively, returning the newly resulting :class:`.Query`.
 
         **Simple Relationship Joins**
@@ -1547,9 +1723,9 @@ class Query(object):
         :meth:`~.Query.join`, each using an explicit attribute to indicate
         the source entity::
 
-            q = session.query(User).\\
-                    join(User.orders).\\
-                    join(Order.items).\\
+            q = session.query(User).\
+                    join(User.orders).\
+                    join(Order.items).\
                     join(Item.keywords)
 
         **Joins to a Target Entity or Selectable**
@@ -1584,10 +1760,10 @@ class Query(object):
 
             a_alias = aliased(Address)
 
-            q = session.query(User).\\
-                    join(User.addresses).\\
-                    join(a_alias, User.addresses).\\
-                    filter(Address.email_address=='ed@foo.com').\\
+            q = session.query(User).\
+                    join(User.addresses).\
+                    join(a_alias, User.addresses).\
+                    filter(Address.email_address=='ed@foo.com').\
                     filter(a_alias.email_address=='ed@bar.com')
 
         Where above, the generated SQL would be similar to::
@@ -1625,11 +1801,11 @@ class Query(object):
         :func:`.alias` and :func:`.select` constructs, with either the one
         or two-argument forms::
 
-            addresses_q = select([Address.user_id]).\\
-                        where(Address.email_address.endswith("@bar.com")).\\
+            addresses_q = select([Address.user_id]).\
+                        where(Address.email_address.endswith("@bar.com")).\
                         alias()
 
-            q = session.query(User).\\
+            q = session.query(User).\
                         join(addresses_q, addresses_q.c.user_id==User.id)
 
         :meth:`~.Query.join` also features the ability to *adapt* a
@@ -1638,8 +1814,8 @@ class Query(object):
         against ``Address``, allowing the relationship denoted by
         ``User.addresses`` to *adapt* itself to the altered target::
 
-            address_subq = session.query(Address).\\
-                            filter(Address.email_address == 'ed@foo.com').\\
+            address_subq = session.query(Address).\
+                            filter(Address.email_address == 'ed@foo.com').\
                             subquery()
 
             q = session.query(User).join(address_subq, User.addresses)
@@ -1658,7 +1834,7 @@ class Query(object):
         The above form allows one to fall back onto an explicit ON
         clause at any time::
 
-            q = session.query(User).\\
+            q = session.query(User).\
                     join(address_subq, User.id==address_subq.c.user_id)
 
         **Controlling what to Join From**
@@ -1671,8 +1847,8 @@ class Query(object):
         the :class:`.Query` to select first from the ``User``
         entity::
 
-            q = session.query(Address).select_from(User).\\
-                            join(User.addresses).\\
+            q = session.query(Address).select_from(User).\
+                            join(User.addresses).\
                             filter(User.name == 'ed')
 
         Which will produce SQL similar to::
@@ -1688,7 +1864,7 @@ class Query(object):
         when a query is being joined algorithmically, such as
         when querying self-referentially to an arbitrary depth::
 
-            q = session.query(Node).\\
+            q = session.query(Node).\
                     join("children", "children", aliased=True)
 
         When ``aliased=True`` is used, the actual "alias" construct
@@ -1696,8 +1872,8 @@ class Query(object):
         :meth:`.Query.filter` will adapt the incoming entity to
         the last join point::
 
-            q = session.query(Node).\\
-                    join("children", "children", aliased=True).\\
+            q = session.query(Node).\
+                    join("children", "children", aliased=True).\
                     filter(Node.name == 'grandchild 1')
 
         When using automatic aliasing, the ``from_joinpoint=True``
@@ -1705,19 +1881,19 @@ class Query(object):
         multiple calls to :meth:`~.Query.join`, so that
         each path along the way can be further filtered::
 
-            q = session.query(Node).\\
-                    join("children", aliased=True).\\
-                    filter(Node.name='child 1').\\
-                    join("children", aliased=True, from_joinpoint=True).\\
+            q = session.query(Node).\
+                    join("children", aliased=True).\
+                    filter(Node.name='child 1').\
+                    join("children", aliased=True, from_joinpoint=True).\
                     filter(Node.name == 'grandchild 1')
 
         The filtering aliases above can then be reset back to the
         original ``Node`` entity using :meth:`~.Query.reset_joinpoint`::
 
-            q = session.query(Node).\\
-                    join("children", "children", aliased=True).\\
-                    filter(Node.name == 'grandchild 1').\\
-                    reset_joinpoint().\\
+            q = session.query(Node).\
+                    join("children", "children", aliased=True).\
+                    filter(Node.name == 'grandchild 1').\
+                    reset_joinpoint().\
                     filter(Node.name == 'parent 1)
 
         For an example of ``aliased=True``, see the distribution
@@ -2128,7 +2304,7 @@ class Query(object):
 
     @_generative(_no_clauseelement_condition)
     def select_from(self, *from_obj):
-        """Set the FROM clause of this :class:`.Query` explicitly.
+        r"""Set the FROM clause of this :class:`.Query` explicitly.
 
         :meth:`.Query.select_from` is often used in conjunction with
         :meth:`.Query.join` in order to control which entity is selected
@@ -2142,8 +2318,8 @@ class Query(object):
 
         A typical example::
 
-            q = session.query(Address).select_from(User).\\
-                join(User.addresses).\\
+            q = session.query(Address).select_from(User).\
+                join(User.addresses).\
                 filter(User.name == 'ed')
 
         Which produces SQL equivalent to::
@@ -2176,7 +2352,7 @@ class Query(object):
 
     @_generative(_no_clauseelement_condition)
     def select_entity_from(self, from_obj):
-        """Set the FROM clause of this :class:`.Query` to a
+        r"""Set the FROM clause of this :class:`.Query` to a
         core selectable, applying it as a replacement FROM clause
         for corresponding mapped entities.
 
@@ -2197,8 +2373,8 @@ class Query(object):
 
             select_stmt = select([User]).where(User.id == 7)
 
-            q = session.query(User).\\
-                    select_entity_from(select_stmt).\\
+            q = session.query(User).\
+                    select_entity_from(select_stmt).\
                     filter(User.name == 'ed')
 
         The query generated will select ``User`` entities directly
@@ -2218,8 +2394,8 @@ class Query(object):
         version 0.9, does not affect existing entities.  The
         statement below::
 
-            q = session.query(User).\\
-                    select_from(select_stmt).\\
+            q = session.query(User).\
+                    select_from(select_stmt).\
                     filter(User.name == 'ed')
 
         Produces SQL where both the ``user`` table as well as the
@@ -2287,9 +2463,35 @@ class Query(object):
 
     @_generative(_no_statement_condition)
     def slice(self, start, stop):
-        """apply LIMIT/OFFSET to the ``Query`` based on a "
-        "range and return the newly resulting ``Query``."""
+        """Computes the "slice" of the :class:`.Query` represented by
+        the given indices and returns the resulting :class:`.Query`.
 
+        The start and stop indices behave like the argument to Python's
+        built-in :func:`range` function. This method provides an
+        alternative to using ``LIMIT``/``OFFSET`` to get a slice of the
+        query.
+
+        For example, ::
+
+            session.query(User).order_by(User.id).slice(1, 3)
+
+        renders as
+
+        .. sourcecode:: sql
+
+           SELECT users.id AS users_id,
+                  users.name AS users_name
+           FROM users ORDER BY users.id
+           LIMIT ? OFFSET ?
+           (2, 1)
+
+        .. seealso::
+
+           :meth:`.Query.limit`
+
+           :meth:`.Query.offset`
+
+        """
         if start is not None and stop is not None:
             self._offset = (self._offset or 0) + start
             self._limit = stop - start
@@ -2304,7 +2506,6 @@ class Query(object):
     @_generative(_no_statement_condition)
     def limit(self, limit):
         """Apply a ``LIMIT`` to the query and return the newly resulting
-
         ``Query``.
 
         """
@@ -2320,8 +2521,21 @@ class Query(object):
 
     @_generative(_no_statement_condition)
     def distinct(self, *criterion):
-        """Apply a ``DISTINCT`` to the query and return the newly resulting
+        r"""Apply a ``DISTINCT`` to the query and return the newly resulting
         ``Query``.
+
+
+        .. note::
+
+            The :meth:`.distinct` call includes logic that will automatically
+            add columns from the ORDER BY of the query to the columns
+            clause of the SELECT statement, to satisfy the common need
+            of the database backend that ORDER BY columns be part of the
+            SELECT list when DISTINCT is used.   These columns *are not*
+            added to the list of columns actually fetched by the
+            :class:`.Query`, however, so would not affect results.
+            The columns are passed through when using the
+            :attr:`.Query.statement` accessor, however.
 
         :param \*expr: optional column expressions.  When present,
          the Postgresql dialect will render a ``DISTINCT ON (<expressions>>)``
@@ -2339,7 +2553,7 @@ class Query(object):
 
     @_generative()
     def prefix_with(self, *prefixes):
-        """Apply the prefixes to the query and return the newly resulting
+        r"""Apply the prefixes to the query and return the newly resulting
         ``Query``.
 
         :param \*prefixes: optional prefixes, typically strings,
@@ -2347,8 +2561,8 @@ class Query(object):
 
         e.g.::
 
-            query = sess.query(User.name).\\
-                prefix_with('HIGH_PRIORITY').\\
+            query = sess.query(User.name).\
+                prefix_with('HIGH_PRIORITY').\
                 prefix_with('SQL_SMALL_RESULT', 'ALL')
 
         Would render::
@@ -2370,7 +2584,7 @@ class Query(object):
 
     @_generative()
     def suffix_with(self, *suffixes):
-        """Apply the suffix to the query and return the newly resulting
+        r"""Apply the suffix to the query and return the newly resulting
         ``Query``.
 
         :param \*suffixes: optional suffixes, typically strings,
@@ -2436,7 +2650,7 @@ class Query(object):
         (note this may consist of multiple result rows if join-loaded
         collections are present).
 
-        Calling ``first()`` results in an execution of the underlying query.
+        Calling :meth:`.Query.first` results in an execution of the underlying query.
 
         """
         if self._statement is not None:
@@ -2448,26 +2662,57 @@ class Query(object):
         else:
             return None
 
+    def one_or_none(self):
+        """Return at most one result or raise an exception.
+
+        Returns ``None`` if the query selects
+        no rows.  Raises ``sqlalchemy.orm.exc.MultipleResultsFound``
+        if multiple object identities are returned, or if multiple
+        rows are returned for a query that returns only scalar values
+        as opposed to full identity-mapped entities.
+
+        Calling :meth:`.Query.one_or_none` results in an execution of the underlying
+        query.
+
+        .. versionadded:: 1.0.9
+
+            Added :meth:`.Query.one_or_none`
+
+        .. seealso::
+
+            :meth:`.Query.first`
+
+            :meth:`.Query.one`
+
+
+        """
+        ret = list(self)
+
+        l = len(ret)
+        if l == 1:
+            return ret[0]
+        elif l == 0:
+            return None
+        else:
+            raise orm_exc.MultipleResultsFound(
+                "Multiple rows were found for one_or_none()")
+
     def one(self):
         """Return exactly one result or raise an exception.
 
         Raises ``sqlalchemy.orm.exc.NoResultFound`` if the query selects
         no rows.  Raises ``sqlalchemy.orm.exc.MultipleResultsFound``
         if multiple object identities are returned, or if multiple
-        rows are returned for a query that does not return object
-        identities.
+        rows are returned for a query that returns only scalar values
+        as opposed to full identity-mapped entities.
 
-        Note that an entity query, that is, one which selects one or
-        more mapped classes as opposed to individual column attributes,
-        may ultimately represent many rows but only one row of
-        unique entity or entities - this is a successful result for one().
+        Calling :meth:`.one` results in an execution of the underlying query.
 
-        Calling ``one()`` results in an execution of the underlying query.
+        .. seealso::
 
-        .. versionchanged:: 0.6
-            ``one()`` fully fetches all results instead of applying
-            any kind of limit, so that the "unique"-ing of entities does not
-            conceal multiple object identities.
+            :meth:`.Query.first`
+
+            :meth:`.Query.one_or_none`
 
         """
         ret = list(self)
@@ -2695,7 +2940,7 @@ class Query(object):
                           statement.with_only_columns([1]))
 
     def count(self):
-        """Return a count of rows this Query would return.
+        r"""Return a count of rows this Query would return.
 
         This generates the SQL for this Query as follows::
 
@@ -2722,7 +2967,7 @@ class Query(object):
 
             # return count of user "id" grouped
             # by "name"
-            session.query(func.count(User.id)).\\
+            session.query(func.count(User.id)).\
                     group_by(User.name)
 
             from sqlalchemy import distinct
@@ -2735,16 +2980,16 @@ class Query(object):
         return self.from_self(col).scalar()
 
     def delete(self, synchronize_session='evaluate'):
-        """Perform a bulk delete query.
+        r"""Perform a bulk delete query.
 
         Deletes rows matched by this query from the database.
 
         E.g.::
 
-            sess.query(User).filter(User.age == 25).\\
+            sess.query(User).filter(User.age == 25).\
                 delete(synchronize_session=False)
 
-            sess.query(User).filter(User.age == 25).\\
+            sess.query(User).filter(User.age == 25).\
                 delete(synchronize_session='evaluate')
 
         .. warning:: The :meth:`.Query.delete` method is a "bulk" operation,
@@ -2778,6 +3023,37 @@ class Query(object):
           "row count" feature.
 
         .. warning:: **Additional Caveats for bulk query deletes**
+
+            * This method does **not work for joined
+              inheritance mappings**, since the **multiple table
+              deletes are not supported by SQL** as well as that the
+              **join condition of an inheritance mapper is not
+              automatically rendered**.  Care must be taken in any
+              multiple-table delete to first accomodate via some other means
+              how the related table will be deleted, as well as to
+              explicitly include the joining
+              condition between those tables, even in mappings where
+              this is normally automatic. E.g. if a class ``Engineer``
+              subclasses ``Employee``, a DELETE against the ``Employee``
+              table would look like::
+
+                    session.query(Engineer).\
+                        filter(Engineer.id == Employee.id).\
+                        filter(Employee.name == 'dilbert').\
+                        delete()
+
+              However the above SQL will not delete from the Engineer table,
+              unless an ON DELETE CASCADE rule is established in the database
+              to handle it.
+
+              Short story, **do not use this method for joined inheritance
+              mappings unless you have taken the additional steps to make
+              this feasible**.
+
+            * The polymorphic identity WHERE criteria is **not** included
+              for single- or
+              joined- table updates - this must be added **manually** even
+              for single table inheritance.
 
             * The method does **not** offer in-Python cascading of
               relationships - it is assumed that ON DELETE CASCADE/SET
@@ -2829,16 +3105,16 @@ class Query(object):
         return delete_op.rowcount
 
     def update(self, values, synchronize_session='evaluate', update_args=None):
-        """Perform a bulk update query.
+        r"""Perform a bulk update query.
 
         Updates rows matched by this query in the database.
 
         E.g.::
 
-            sess.query(User).filter(User.age == 25).\\
+            sess.query(User).filter(User.age == 25).\
                 update({User.age: User.age - 10}, synchronize_session=False)
 
-            sess.query(User).filter(User.age == 25).\\
+            sess.query(User).filter(User.age == 25).\
                 update({"age": User.age - 10}, synchronize_session='evaluate')
 
 
@@ -2849,7 +3125,12 @@ class Query(object):
 
         :param values: a dictionary with attributes names, or alternatively
          mapped attributes or SQL expressions, as keys, and literal
-         values or sql expressions as values.
+         values or sql expressions as values.   If :ref:`parameter-ordered
+         mode <updates_order_parameters>` is desired, the values can be
+         passed as a list of 2-tuples;
+         this requires that the :paramref:`~sqlalchemy.sql.expression.update.preserve_parameter_order`
+         flag is passed to the :paramref:`.Query.update.update_args` dictionary
+         as well.
 
           .. versionchanged:: 1.0.0 - string names in the values dictionary
              are now resolved against the mapped entity; previously, these
@@ -2880,7 +3161,8 @@ class Query(object):
         :param update_args: Optional dictionary, if present will be passed
          to the underlying :func:`.update` construct as the ``**kw`` for
          the object.  May be used to pass dialect-specific arguments such
-         as ``mysql_limit``.
+         as ``mysql_limit``, as well as other special arguments such as
+         :paramref:`~sqlalchemy.sql.expression.update.preserve_parameter_order`.
 
          .. versionadded:: 1.0.0
 
@@ -2925,10 +3207,15 @@ class Query(object):
               local table using criteria against the ``Employee``
               local table might look like::
 
-                    session.query(Engineer).\\
-                        filter(Engineer.id == Employee.id).\\
-                        filter(Employee.name == 'dilbert').\\
+                    session.query(Engineer).\
+                        filter(Engineer.id == Employee.id).\
+                        filter(Employee.name == 'dilbert').\
                         update({"engineer_type": "programmer"})
+
+            * The polymorphic identity WHERE criteria is **not** included
+              for single- or
+              joined- table updates - this must be added **manually**, even
+              for single table inheritance.
 
             * The :meth:`.MapperEvents.before_update` and
               :meth:`.MapperEvents.after_update`
@@ -3373,7 +3660,7 @@ class Bundle(InspectionAttr):
     is_aliased_class = False
 
     def __init__(self, name, *exprs, **kw):
-        """Construct a new :class:`.Bundle`.
+        r"""Construct a new :class:`.Bundle`.
 
         e.g.::
 
@@ -3751,7 +4038,7 @@ class QueryContext(object):
 class AliasOption(interfaces.MapperOption):
 
     def __init__(self, alias):
-        """Return a :class:`.MapperOption` that will indicate to the :class:`.Query`
+        r"""Return a :class:`.MapperOption` that will indicate to the :class:`.Query`
         that the main table has been aliased.
 
         This is a seldom-used option to suit the
@@ -3760,12 +4047,12 @@ class AliasOption(interfaces.MapperOption):
         statement that aliases the parent table.  E.g.::
 
             # define an aliased UNION called 'ulist'
-            ulist = users.select(users.c.user_id==7).\\
-                            union(users.select(users.c.user_id>7)).\\
+            ulist = users.select(users.c.user_id==7).\
+                            union(users.select(users.c.user_id>7)).\
                             alias('ulist')
 
             # add on an eager load of "addresses"
-            statement = ulist.outerjoin(addresses).\\
+            statement = ulist.outerjoin(addresses).\
                             select().apply_labels()
 
             # create query, indicating "ulist" will be an

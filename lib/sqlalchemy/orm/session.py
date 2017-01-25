@@ -1,5 +1,5 @@
 # orm/session.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -96,7 +96,18 @@ class SessionTransaction(object):
 
     The :attr:`.Session.transaction` attribute of :class:`.Session`
     refers to the current :class:`.SessionTransaction` object in use, if any.
+    The :attr:`.SessionTransaction.parent` attribute refers to the parent
+    :class:`.SessionTransaction` in the stack of :class:`.SessionTransaction`
+    objects.  If this attribute is ``None``, then this is the top of the stack.
+    If non-``None``, then this :class:`.SessionTransaction` refers either
+    to a so-called "subtransaction" or a "nested" transaction.  A
+    "subtransaction" is a scoping concept that demarcates an inner portion
+    of the outermost "real" transaction.  A nested transaction, which
+    is indicated when the :attr:`.SessionTransaction.nested`
+    attribute is also True, indicates that this :class:`.SessionTransaction`
+    corresponds to a SAVEPOINT.
 
+    **Life Cycle**
 
     A :class:`.SessionTransaction` is associated with a :class:`.Session`
     in its default mode of ``autocommit=False`` immediately, associated
@@ -106,7 +117,9 @@ class SessionTransaction(object):
     :class:`.Transaction` is added to a collection within the
     :class:`.SessionTransaction` object, becoming one of the
     connection/transaction pairs maintained by the
-    :class:`.SessionTransaction`.
+    :class:`.SessionTransaction`.  The start of a :class:`.SessionTransaction`
+    can be tracked using the :meth:`.SessionEvents.after_transaction_create`
+    event.
 
     The lifespan of the :class:`.SessionTransaction` ends when the
     :meth:`.Session.commit`, :meth:`.Session.rollback` or
@@ -116,7 +129,11 @@ class SessionTransaction(object):
     mode will create a new :class:`.SessionTransaction` to replace it
     immediately, whereas a :class:`.Session` that's in ``autocommit=True``
     mode will remain without a :class:`.SessionTransaction` until the
-    :meth:`.Session.begin` method is called.
+    :meth:`.Session.begin` method is called.  The end of a
+    :class:`.SessionTransaction` can be tracked using the
+    :meth:`.SessionEvents.after_transaction_end` event.
+
+    **Nesting and Subtransactions**
 
     Another detail of :class:`.SessionTransaction` behavior is that it is
     capable of "nesting".  This means that the :meth:`.Session.begin` method
@@ -124,12 +141,18 @@ class SessionTransaction(object):
     present, producing a new :class:`.SessionTransaction` that temporarily
     replaces the parent :class:`.SessionTransaction`.   When a
     :class:`.SessionTransaction` is produced as nested, it assigns itself to
-    the :attr:`.Session.transaction` attribute.  When it is ended via
+    the :attr:`.Session.transaction` attribute, and it additionally will assign
+    the previous :class:`.SessionTransaction` to its :attr:`.Session.parent`
+    attribute.  The behavior is effectively a
+    stack, where :attr:`.Session.transaction` refers to the current head of
+    the stack, and the :attr:`.SessionTransaction.parent` attribute allows
+    traversal up the stack until :attr:`.SessionTransaction.parent` is
+    ``None``, indicating the top of the stack.
+
+    When the scope of :class:`.SessionTransaction` is ended via
     :meth:`.Session.commit` or :meth:`.Session.rollback`, it restores its
     parent :class:`.SessionTransaction` back onto the
-    :attr:`.Session.transaction` attribute.  The behavior is effectively a
-    stack, where :attr:`.Session.transaction` refers to the current head of
-    the stack.
+    :attr:`.Session.transaction` attribute.
 
     The purpose of this stack is to allow nesting of
     :meth:`.Session.rollback` or :meth:`.Session.commit` calls in context
@@ -144,7 +167,17 @@ class SessionTransaction(object):
     within in a transaction block regardless of whether or not the
     :class:`.Session` is in transactional mode when the method is called.
 
-    See also:
+    Note that the flush process that occurs within the "autoflush" feature
+    as well as when the :meth:`.Session.flush` method is used **always**
+    creates a :class:`.SessionTransaction` object.   This object is normally
+    a subtransaction, unless the :class:`.Session` is in autocommit mode
+    and no transaction exists at all, in which case it's the outermost
+    transaction.   Any event-handling logic or other inspection logic
+    needs to take into account whether a :class:`.SessionTransaction`
+    is the outermost transaction, a subtransaction, or a "nested" / SAVEPOINT
+    transaction.
+
+    .. seealso::
 
     :meth:`.Session.rollback`
 
@@ -155,6 +188,10 @@ class SessionTransaction(object):
     :meth:`.Session.begin_nested`
 
     :attr:`.Session.is_active`
+
+    :meth:`.SessionEvents.after_transaction_create`
+
+    :meth:`.SessionEvents.after_transaction_end`
 
     :meth:`.SessionEvents.after_commit`
 
@@ -182,6 +219,32 @@ class SessionTransaction(object):
 
         if self.session.dispatch.after_transaction_create:
             self.session.dispatch.after_transaction_create(self.session, self)
+
+    @property
+    def parent(self):
+        """The parent :class:`.SessionTransaction` of this
+        :class:`.SessionTransaction`.
+
+        If this attribute is ``None``, indicates this
+        :class:`.SessionTransaction` is at the top of the stack, and
+        corresponds to a real "COMMIT"/"ROLLBACK"
+        block.  If non-``None``, then this is either a "subtransaction"
+        or a "nested" / SAVEPOINT transaction.  If the
+        :attr:`.SessionTransaction.nested` attribute is ``True``, then
+        this is a SAVEPOINT, and if ``False``, indicates this a subtransaction.
+
+        .. versionadded:: 1.0.16 - use ._parent for previous versions
+
+        """
+        return self._parent
+
+    nested = False
+    """Indicates if this is a nested, or SAVEPOINT, transaction.
+
+    When :attr:`.SessionTransaction.nested` is True, it is expected
+    that :attr:`.SessionTransaction.parent` will be True as well.
+
+    """
 
     @property
     def is_active(self):
@@ -515,7 +578,7 @@ class Session(_SessionClassMethods):
                  weak_identity_map=True, binds=None, extension=None,
                  info=None,
                  query_cls=query.Query):
-        """Construct a new Session.
+        r"""Construct a new Session.
 
         See also the :class:`.sessionmaker` function which is used to
         generate a :class:`.Session`-producing callable with a given
@@ -630,15 +693,26 @@ class Session(_SessionClassMethods):
            ``False``, objects placed in the :class:`.Session` will be
            strongly referenced until explicitly removed or the
            :class:`.Session` is closed.  **Deprecated** - this option
-           is obsolete.
+           is present to allow compatibility with older applications, but
+           it is recommended that strong references to objects
+           be maintained by the calling application
+           externally to the :class:`.Session` itself,
+           to the extent that is required by the application.
 
         """
 
         if weak_identity_map:
             self._identity_cls = identity.WeakInstanceDict
         else:
-            util.warn_deprecated("weak_identity_map=False is deprecated.  "
-                                 "This feature is not needed.")
+            util.warn_deprecated(
+                "weak_identity_map=False is deprecated.  "
+                "It is present to allow compatibility with older "
+                "applications, but "
+                "it is recommended that strong references to "
+                "objects be maintained by the calling application "
+                "externally to the :class:`.Session` itself, "
+                "to the extent that is required by the application.")
+
             self._identity_cls = identity.StrongInstanceDict
         self.identity_map = self._identity_cls()
 
@@ -680,7 +754,7 @@ class Session(_SessionClassMethods):
     def info(self):
         """A user-modifiable dictionary.
 
-        The initial value of this dictioanry can be populated using the
+        The initial value of this dictionary can be populated using the
         ``info`` argument to the :class:`.Session` constructor or
         :class:`.sessionmaker` constructor or factory methods.  The dictionary
         here is always local to this :class:`.Session` and can be modified
@@ -813,7 +887,7 @@ class Session(_SessionClassMethods):
                    close_with_result=False,
                    execution_options=None,
                    **kw):
-        """Return a :class:`.Connection` object corresponding to this
+        r"""Return a :class:`.Connection` object corresponding to this
         :class:`.Session` object's transactional state.
 
         If this :class:`.Session` is configured with ``autocommit=False``,
@@ -892,7 +966,7 @@ class Session(_SessionClassMethods):
             return conn
 
     def execute(self, clause, params=None, mapper=None, bind=None, **kw):
-        """Execute a SQL expression construct or string statement within
+        r"""Execute a SQL expression construct or string statement within
         the current transaction.
 
         Returns a :class:`.ResultProxy` representing
@@ -1102,9 +1176,8 @@ class Session(_SessionClassMethods):
             insp = inspect(key)
         except sa_exc.NoInspectionAvailable:
             if not isinstance(key, type):
-                raise exc.ArgumentError(
-                            "Not acceptable bind target: %s" %
-                            key)
+                raise sa_exc.ArgumentError(
+                    "Not an acceptable bind target: %s" % key)
             else:
                 self.__binds[key] = bind
         else:
@@ -1115,9 +1188,8 @@ class Session(_SessionClassMethods):
                 for selectable in insp._all_tables:
                     self.__binds[selectable] = bind
             else:
-                raise exc.ArgumentError(
-                            "Not acceptable bind target: %s" %
-                            key)
+                raise sa_exc.ArgumentError(
+                    "Not an acceptable bind target: %s" % key)
 
     def bind_mapper(self, mapper, bind):
         """Associate a :class:`.Mapper` with a "bind", e.g. a :class:`.Engine`
@@ -1715,6 +1787,9 @@ class Session(_SessionClassMethods):
                     "all changes on mapped instances before merging with "
                     "load=False.")
             key = mapper._identity_key_from_state(state)
+            key_is_persistent = attributes.NEVER_SET not in key[1]
+        else:
+            key_is_persistent = True
 
         if key in self.identity_map:
             merged = self.identity_map[key]
@@ -1731,9 +1806,10 @@ class Session(_SessionClassMethods):
             self._update_impl(merged_state)
             new_instance = True
 
-        elif not _none_set.intersection(key[1]) or \
+        elif key_is_persistent and (
+            not _none_set.intersection(key[1]) or
             (mapper.allow_partial_pks and
-             not _none_set.issuperset(key[1])):
+             not _none_set.issuperset(key[1]))):
             merged = self.query(mapper.class_).get(key[1])
         else:
             merged = None
@@ -1983,7 +2059,7 @@ class Session(_SessionClassMethods):
 
         For ``autocommit`` Sessions with no active manual transaction, flush()
         will create a transaction on the fly that surrounds the entire set of
-        operations int the flush.
+        operations into the flush.
 
         :param objects: Optional; restricts the flush operation to operate
           only on elements that are in the given collection.
@@ -2343,7 +2419,7 @@ class Session(_SessionClassMethods):
 
     def is_modified(self, instance, include_collections=True,
                     passive=True):
-        """Return ``True`` if the given instance has locally
+        r"""Return ``True`` if the given instance has locally
         modified attributes.
 
         This method retrieves the history for each instrumented
@@ -2401,6 +2477,7 @@ class Session(_SessionClassMethods):
          or many-to-one foreign keys) that would result in an UPDATE for this
          instance upon flush.
         :param passive:
+
          .. versionchanged:: 0.8
              Ignored for backwards compatibility.
              When using SQLAlchemy 0.7 and earlier, this flag should always
@@ -2605,7 +2682,7 @@ class sessionmaker(_SessionClassMethods):
                  autocommit=False,
                  expire_on_commit=True,
                  info=None, **kw):
-        """Construct a new :class:`.sessionmaker`.
+        r"""Construct a new :class:`.sessionmaker`.
 
         All arguments here except for ``class_`` correspond to arguments
         accepted by :class:`.Session` directly.  See the
@@ -2683,18 +2760,49 @@ class sessionmaker(_SessionClassMethods):
 
 
 def make_transient(instance):
-    """Make the given instance 'transient'.
+    """Alter the state of the given instance so that it is :term:`transient`.
 
-    This will remove its association with any
-    session and additionally will remove its "identity key",
-    such that it's as though the object were newly constructed,
-    except retaining its values.   It also resets the
-    "deleted" flag on the state if this object
-    had been explicitly deleted by its session.
+    .. note::
 
-    Attributes which were "expired" or deferred at the
-    instance level are reverted to undefined, and
-    will not trigger any loads.
+        :func:`.make_transient` is a special-case function for
+        advanced use cases only.
+
+    The given mapped instance is assumed to be in the :term:`persistent` or
+    :term:`detached` state.   The function will remove its association with any
+    :class:`.Session` as well as its :attr:`.InstanceState.identity`. The
+    effect is that the object will behave as though it were newly constructed,
+    except retaining any attribute / collection values that were loaded at the
+    time of the call.   The :attr:`.InstanceState.deleted` flag is also reset
+    if this object had been deleted as a result of using
+    :meth:`.Session.delete`.
+
+    .. warning::
+
+        :func:`.make_transient` does **not** "unexpire" or otherwise eagerly
+        load ORM-mapped attributes that are not currently loaded at the time
+        the function is called.   This includes attributes which:
+
+        * were expired via :meth:`.Session.expire`
+
+        * were expired as the natural effect of committing a session
+          transaction, e.g. :meth:`.Session.commit`
+
+        * are normally :term:`lazy loaded` but are not currently loaded
+
+        * are "deferred" via :ref:`deferred` and are not yet loaded
+
+        * were not present in the query which loaded this object, such as that
+          which is common in joined table inheritance and other scenarios.
+
+        After :func:`.make_transient` is called, unloaded attributes such
+        as those above will normally resolve to the value ``None`` when
+        accessed, or an empty collection for a collection-oriented attribute.
+        As the object is transient and un-associated with any database
+        identity, it will no longer retrieve these values.
+
+    .. seealso::
+
+        :func:`.make_transient_to_detached`
 
     """
     state = attributes.instance_state(instance)
@@ -2716,7 +2824,12 @@ def make_transient(instance):
 
 
 def make_transient_to_detached(instance):
-    """Make the given transient instance 'detached'.
+    """Make the given transient instance :term:`detached`.
+
+    .. note::
+
+        :func:`.make_transient_to_detached` is a special-case function for
+        advanced use cases only.
 
     All attribute history on the given instance
     will be reset as though the instance were freshly loaded

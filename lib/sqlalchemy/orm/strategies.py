@@ -1,5 +1,5 @@
 # orm/strategies.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -71,8 +71,20 @@ def _register_attribute(
             )
         )
 
+    # a single MapperProperty is shared down a class inheritance
+    # hierarchy, so we set up attribute instrumentation and backref event
+    # for each mapper down the hierarchy.
+
+    # typically, "mapper" is the same as prop.parent, due to the way
+    # the configure_mappers() process runs, however this is not strongly
+    # enforced, and in the case of a second configure_mappers() run the
+    # mapper here might not be prop.parent; also, a subclass mapper may
+    # be called here before a superclass mapper.  That is, can't depend
+    # on mappers not already being set up so we have to check each one.
+
     for m in mapper.self_and_descendants:
-        if prop is m._props.get(prop.key):
+        if prop is m._props.get(prop.key) and \
+                not m.class_manager._attr_has_impl(prop.key):
 
             desc = attributes.register_attribute_impl(
                 m.class_,
@@ -83,8 +95,8 @@ def _register_attribute(
                 useobject=useobject,
                 extension=attribute_ext,
                 trackparent=useobject and (
-                    prop.single_parent
-                    or prop.direction is interfaces.ONETOMANY),
+                    prop.single_parent or
+                    prop.direction is interfaces.ONETOMANY),
                 typecallable=typecallable,
                 callable_=callable_,
                 active_history=active_history,
@@ -100,7 +112,7 @@ def _register_attribute(
 
 @properties.ColumnProperty.strategy_for(instrument=False, deferred=False)
 class UninstrumentedColumnLoader(LoaderStrategy):
-    """Represent the a non-instrumented MapperProperty.
+    """Represent a non-instrumented MapperProperty.
 
     The polymorphic_on argument of mapper() often results in this,
     if the argument is against the with_polymorphic selectable.
@@ -174,7 +186,7 @@ class ColumnLoader(LoaderStrategy):
         for col in self.columns:
             if adapter:
                 col = adapter.columns[col]
-            getter = result._getter(col)
+            getter = result._getter(col, False)
             if getter:
                 populators["quick"].append((self.key, getter))
                 break
@@ -238,7 +250,7 @@ class DeferredColumnLoader(LoaderStrategy):
             (
                 loadopt and
                 self.group and
-                loadopt.local_opts.get('undefer_group', False) == self.group
+                loadopt.local_opts.get('undefer_group_%s' % self.group, False)
             )
             or
             (
@@ -346,7 +358,10 @@ class NoLoader(AbstractRelationshipLoader):
             self, context, path, loadopt, mapper,
             result, adapter, populators):
         def invoke_no_load(state, dict_, row):
-            state._initialize(self.key)
+            if self.uselist:
+                state.manager.get_impl(self.key).initialize(state, dict_)
+            else:
+                dict_[self.key] = None
         populators["new"].append((self.key, invoke_no_load))
 
 
@@ -361,7 +376,8 @@ class LazyLoader(AbstractRelationshipLoader, util.MemoizedSlots):
 
     __slots__ = (
         '_lazywhere', '_rev_lazywhere', 'use_get', '_bind_to_col',
-        '_equated_columns', '_rev_bind_to_col', '_rev_equated_columns')
+        '_equated_columns', '_rev_bind_to_col', '_rev_equated_columns',
+        '_simple_lazy_clause')
 
     def __init__(self, parent):
         super(LazyLoader, self).__init__(parent)
@@ -872,28 +888,21 @@ class SubqueryLoader(AbstractRelationshipLoader):
 
         # determine the immediate parent class we are joining from,
         # which needs to be aliased.
-        if len(to_join) > 1:
-            info = inspect(to_join[-1][0])
 
         if len(to_join) < 2:
             # in the case of a one level eager load, this is the
             # leftmost "left_alias".
             parent_alias = left_alias
-        elif info.mapper.isa(self.parent):
-            # In the case of multiple levels, retrieve
-            # it from subq_path[-2]. This is the same as self.parent
-            # in the vast majority of cases, and [ticket:2014]
-            # illustrates a case where sub_path[-2] is a subclass
-            # of self.parent
-            parent_alias = orm_util.AliasedClass(
-                to_join[-1][0],
-                use_mapper_path=True)
         else:
-            # if of_type() were used leading to this relationship,
-            # self.parent is more specific than subq_path[-2]
-            parent_alias = orm_util.AliasedClass(
-                self.parent,
-                use_mapper_path=True)
+            info = inspect(to_join[-1][0])
+            if info.is_aliased_class:
+                parent_alias = info.entity
+            else:
+                # alias a plain mapper as we may be
+                # joining multiple times
+                parent_alias = orm_util.AliasedClass(
+                    info.entity,
+                    use_mapper_path=True)
 
         local_cols = self.parent_property.local_columns
 
@@ -906,35 +915,46 @@ class SubqueryLoader(AbstractRelationshipLoader):
     def _apply_joins(
             self, q, to_join, left_alias, parent_alias,
             effective_entity):
-        for i, (mapper, key) in enumerate(to_join):
 
-            # we need to use query.join() as opposed to
-            # orm.join() here because of the
-            # rich behavior it brings when dealing with
-            # "with_polymorphic" mappers.  "aliased"
-            # and "from_joinpoint" take care of most of
-            # the chaining and aliasing for us.
+        ltj = len(to_join)
+        if ltj == 1:
+            to_join = [
+                getattr(left_alias, to_join[0][1]).of_type(effective_entity)
+            ]
+        elif ltj == 2:
+            to_join = [
+                getattr(left_alias, to_join[0][1]).of_type(parent_alias),
+                getattr(parent_alias, to_join[-1][1]).of_type(effective_entity)
+            ]
+        elif ltj > 2:
+            middle = [
+                (
+                    orm_util.AliasedClass(item[0])
+                    if not inspect(item[0]).is_aliased_class
+                    else item[0].entity,
+                    item[1]
+                ) for item in to_join[1:-1]
+            ]
+            inner = []
 
-            first = i == 0
-            middle = i < len(to_join) - 1
-            second_to_last = i == len(to_join) - 2
-            last = i == len(to_join) - 1
-
-            if first:
-                attr = getattr(left_alias, key)
-                if last and effective_entity is not self.mapper:
-                    attr = attr.of_type(effective_entity)
-            else:
-                if last and effective_entity is not self.mapper:
-                    attr = getattr(parent_alias, key).\
-                        of_type(effective_entity)
+            while middle:
+                item = middle.pop(0)
+                attr = getattr(item[0], item[1])
+                if middle:
+                    attr = attr.of_type(middle[0][0])
                 else:
-                    attr = getattr(mapper.entity, key)
+                    attr = attr.of_type(parent_alias)
 
-            if second_to_last:
-                q = q.join(parent_alias, attr, from_joinpoint=True)
-            else:
-                q = q.join(attr, aliased=middle, from_joinpoint=True)
+                inner.append(attr)
+
+            to_join = [
+                getattr(left_alias, to_join[0][1]).of_type(inner[0].parent)
+            ] + inner + [
+                getattr(parent_alias, to_join[-1][1]).of_type(effective_entity)
+            ]
+
+        for attr in to_join:
+            q = q.join(attr, from_joinpoint=True)
         return q
 
     def _setup_options(self, q, subq_path, orig_query, effective_entity):
@@ -1321,8 +1341,19 @@ class JoinedLoader(AbstractRelationshipLoader):
 
         if adapter:
             if getattr(adapter, 'aliased_class', None):
+                # joining from an adapted entity.  The adapted entity
+                # might be a "with_polymorphic", so resolve that to our
+                # specific mapper's entity before looking for our attribute
+                # name on it.
+                efm = inspect(adapter.aliased_class).\
+                    _entity_for_mapper(
+                        localparent
+                        if localparent.isa(self.parent) else self.parent)
+
+                # look for our attribute on the adapted entity, else fall back
+                # to our straight property
                 onclause = getattr(
-                    adapter.aliased_class, self.key,
+                    efm.entity, self.key,
                     self.parent_property)
             else:
                 onclause = getattr(
@@ -1363,8 +1394,7 @@ class JoinedLoader(AbstractRelationshipLoader):
         # send a hint to the Query as to where it may "splice" this join
         eagerjoin.stop_on = entity.selectable
 
-        if self.parent_property.secondary is None and \
-                not parentmapper:
+        if not parentmapper:
             # for parentclause that is the non-eager end of the join,
             # ensure all the parent cols in the primaryjoin are actually
             # in the

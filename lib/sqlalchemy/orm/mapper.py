@@ -1,5 +1,5 @@
 # orm/mapper.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -117,7 +117,7 @@ class Mapper(InspectionAttr):
                  legacy_is_orphan=False,
                  _compiled_cache_size=100,
                  ):
-        """Return a new :class:`~.Mapper` object.
+        r"""Return a new :class:`~.Mapper` object.
 
         This function is typically used behind the scenes
         via the Declarative extension.   When using Declarative,
@@ -650,7 +650,7 @@ class Mapper(InspectionAttr):
 
     @property
     def entity(self):
-        """Part of the inspection API.
+        r"""Part of the inspection API.
 
         Returns self.class\_.
 
@@ -1180,7 +1180,6 @@ class Mapper(InspectionAttr):
             instrumentation.unregister_class(self.class_)
 
     def _configure_pks(self):
-
         self.tables = sql_util.find_tables(self.mapped_table)
 
         self._pks_by_table = {}
@@ -1266,7 +1265,6 @@ class Mapper(InspectionAttr):
                 col.table not in self._cols_by_table))
 
     def _configure_properties(self):
-
         # Column and other ClauseElement objects which are mapped
         self.columns = self.c = util.OrderedProperties()
 
@@ -1348,9 +1346,6 @@ class Mapper(InspectionAttr):
                 # polymorphic_on is a column that is already mapped
                 # to a ColumnProperty
                 prop = self._columntoproperty[self.polymorphic_on]
-                polymorphic_key = prop.key
-                self.polymorphic_on = prop.columns[0]
-                polymorphic_key = prop.key
             elif isinstance(self.polymorphic_on, MapperProperty):
                 # polymorphic_on is directly a MapperProperty,
                 # ensure it's a ColumnProperty
@@ -1361,8 +1356,6 @@ class Mapper(InspectionAttr):
                         "property or SQL expression "
                         "can be passed for polymorphic_on")
                 prop = self.polymorphic_on
-                self.polymorphic_on = prop.columns[0]
-                polymorphic_key = prop.key
             elif not expression._is_column(self.polymorphic_on):
                 # polymorphic_on is not a Column and not a ColumnProperty;
                 # not supported right now.
@@ -1424,12 +1417,14 @@ class Mapper(InspectionAttr):
                         col.label("_sa_polymorphic_on")
                     key = col.key
 
-                self._configure_property(
-                    key,
-                    properties.ColumnProperty(col,
-                                              _instrument=instrument),
-                    init=init, setparent=True)
-                polymorphic_key = key
+                prop = properties.ColumnProperty(col, _instrument=instrument)
+                self._configure_property(key, prop, init=init, setparent=True)
+
+            # the actual polymorphic_on should be the first public-facing
+            # column in the property
+            self.polymorphic_on = prop.columns[0]
+            polymorphic_key = prop.key
+
         else:
             # no polymorphic_on was set.
             # check inheriting mappers for one.
@@ -1951,13 +1946,35 @@ class Mapper(InspectionAttr):
         )
 
     @_memoized_configured_property
+    def _pk_attr_keys_by_table(self):
+        return dict(
+            (
+                table,
+                frozenset([self._columntoproperty[col].key for col in pks])
+            )
+            for table, pks in self._pks_by_table.items()
+        )
+
+    @_memoized_configured_property
     def _server_default_cols(self):
         return dict(
             (
                 table,
                 frozenset([
-                    col for col in columns
+                    col.key for col in columns
                     if col.server_default is not None])
+            )
+            for table, columns in self._cols_by_table.items()
+        )
+
+    @_memoized_configured_property
+    def _server_onupdate_default_cols(self):
+        return dict(
+            (
+                table,
+                frozenset([
+                    col.key for col in columns
+                    if col.server_onupdate is not None])
             )
             for table, columns in self._cols_by_table.items()
         )
@@ -2020,7 +2037,7 @@ class Mapper(InspectionAttr):
                     continue
                 yield c
 
-    @util.memoized_property
+    @_memoized_configured_property
     def attrs(self):
         """A namespace of all :class:`.MapperProperty` objects
         associated this mapper.
@@ -2038,6 +2055,17 @@ class Mapper(InspectionAttr):
         returned, inclding :attr:`.synonyms`, :attr:`.column_attrs`,
         :attr:`.relationships`, and :attr:`.composites`.
 
+        .. warning::
+
+            The :attr:`.Mapper.attrs` accessor namespace is an
+            instance of :class:`.OrderedProperties`.  This is
+            a dictionary-like object which includes a small number of
+            named methods such as :meth:`.OrderedProperties.items`
+            and :meth:`.OrderedProperties.values`.  When
+            accessing attributes dynamically, favor using the dict-access
+            scheme, e.g. ``mapper.attrs[somename]`` over
+            ``getattr(mapper.attrs, somename)`` to avoid name collisions.
+
         .. seealso::
 
             :attr:`.Mapper.all_orm_descriptors`
@@ -2047,7 +2075,7 @@ class Mapper(InspectionAttr):
             configure_mappers()
         return util.ImmutableProperties(self._props)
 
-    @util.memoized_property
+    @_memoized_configured_property
     def all_orm_descriptors(self):
         """A namespace of all :class:`.InspectionAttr` attributes associated
         with the mapped class.
@@ -2072,6 +2100,18 @@ class Mapper(InspectionAttr):
         :class:`.MapperProperty` property, which is what you get when
         referring to the collection of mapped properties via
         :attr:`.Mapper.attrs`.
+
+        .. warning::
+
+            The :attr:`.Mapper.all_orm_descriptors` accessor namespace is an
+            instance of :class:`.OrderedProperties`.  This is
+            a dictionary-like object which includes a small number of
+            named methods such as :meth:`.OrderedProperties.items`
+            and :meth:`.OrderedProperties.values`.  When
+            accessing attributes dynamically, favor using the dict-access
+            scheme, e.g. ``mapper.all_orm_descriptors[somename]`` over
+            ``getattr(mapper.all_orm_descriptors, somename)`` to avoid name
+            collisions.
 
         .. versionadded:: 0.8.0
 
@@ -2111,8 +2151,20 @@ class Mapper(InspectionAttr):
 
     @_memoized_configured_property
     def relationships(self):
-        """Return a namespace of all :class:`.RelationshipProperty`
-        properties maintained by this :class:`.Mapper`.
+        """A namespace of all :class:`.RelationshipProperty` properties
+        maintained by this :class:`.Mapper`.
+
+        .. warning::
+
+            the :attr:`.Mapper.relationships` accessor namespace is an
+            instance of :class:`.OrderedProperties`.  This is
+            a dictionary-like object which includes a small number of
+            named methods such as :meth:`.OrderedProperties.items`
+            and :meth:`.OrderedProperties.values`.  When
+            accessing attributes dynamically, favor using the dict-access
+            scheme, e.g. ``mapper.relationships[somename]`` over
+            ``getattr(mapper.relationships, somename)`` to avoid name
+            collisions.
 
         .. seealso::
 
@@ -2524,15 +2576,24 @@ class Mapper(InspectionAttr):
         for all relationships that meet the given cascade rule.
 
         :param type_:
-          The name of the cascade rule (i.e. save-update, delete,
-          etc.)
+          The name of the cascade rule (i.e. ``"save-update"``, ``"delete"``,
+          etc.).
+
+          .. note::  the ``"all"`` cascade is not accepted here.  For a generic
+             object traversal function, see :ref:`faq_walk_objects`.
 
         :param state:
           The lead InstanceState.  child items will be processed per
           the relationships defined for this object's mapper.
 
-        the return value are object instances; this provides a strong
-        reference so that they don't fall out of scope immediately.
+        :return: the method yields individual object instances.
+
+        .. seealso::
+
+            :ref:`unitofwork_cascades`
+
+            :ref:`faq_walk_objects` - illustrates a generic function to
+            traverse all objects without relying on cascades.
 
         """
         visited_states = set()
@@ -2649,7 +2710,33 @@ def configure_mappers():
     have been constructed thus far.
 
     This function can be called any number of times, but in
-    most cases is handled internally.
+    most cases is invoked automatically, the first time mappings are used,
+    as well as whenever mappings are used and additional not-yet-configured
+    mappers have been constructed.
+
+    Points at which this occur include when a mapped class is instantiated
+    into an instance, as well as when the :meth:`.Session.query` method
+    is used.
+
+    The :func:`.configure_mappers` function provides several event hooks
+    that can be used to augment its functionality.  These methods include:
+
+    * :meth:`.MapperEvents.before_configured` - called once before
+      :func:`.configure_mappers` does any work; this can be used to establish
+      additional options, properties, or related mappings before the operation
+      proceeds.
+
+    * :meth:`.MapperEvents.mapper_configured` - called as each indivudal
+      :class:`.Mapper` is configured within the process; will include all
+      mapper state except for backrefs set up by other mappers that are still
+      to be configured.
+
+    * :meth:`.MapperEvents.after_configured` - called once after
+      :func:`.configure_mappers` is complete; at this stage, all
+      :class:`.Mapper` objects that are known  to SQLAlchemy will be fully
+      configured.  Note that the calling application may still have other
+      mappings that haven't been produced yet, such as if they are in modules
+      as yet unimported.
 
     """
 
@@ -2724,7 +2811,7 @@ def reconstructor(fn):
 
 
 def validates(*names, **kw):
-    """Decorate a method as a 'validator' for one or more named properties.
+    r"""Decorate a method as a 'validator' for one or more named properties.
 
     Designates a method as a validator, a method which receives the
     name of the attribute as well as a value to be assigned, or in the

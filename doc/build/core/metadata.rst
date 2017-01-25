@@ -45,7 +45,7 @@ Note also that each column describes its datatype using objects corresponding
 to genericized types, such as :class:`~sqlalchemy.types.Integer` and
 :class:`~sqlalchemy.types.String`. SQLAlchemy features dozens of types of
 varying levels of specificity as well as the ability to create custom types.
-Documentation on the type system can be found at :ref:`types`.
+Documentation on the type system can be found at :ref:`types_toplevel`.
 
 Accessing Tables and Columns
 ----------------------------
@@ -58,7 +58,7 @@ dependency (that is, each table is preceded by all tables which it
 references)::
 
     >>> for t in metadata.sorted_tables:
-    ...    print t.name
+    ...    print(t.name)
     user
     user_preference
     invoice
@@ -93,15 +93,15 @@ table include::
 
     # iterate through all columns
     for c in employees.c:
-        print c
+        print(c)
 
     # get the table's primary key columns
     for primary_key in employees.primary_key:
-        print primary_key
+        print(primary_key)
 
     # get the table's foreign key objects:
     for fkey in employees.foreign_keys:
-        print fkey
+        print(fkey)
 
     # access the table's MetaData:
     employees.metadata
@@ -243,12 +243,12 @@ database schemas in relation to application code using schema migration tools.
 
 There are two major migration tools available for SQLAlchemy:
 
-* `Alembic <http://alembic.readthedocs.org>`_ - Written by the author of SQLAlchemy,
+* `Alembic <http://alembic.zzzcomputing.com>`_ - Written by the author of SQLAlchemy,
   Alembic features a highly customizable environment and a minimalistic usage pattern,
   supporting such features as transactional DDL, automatic generation of "candidate"
   migrations, an "offline" mode which generates SQL scripts, and support for branch
   resolution.
-* `SQLAlchemy-Migrate <http://code.google.com/p/sqlalchemy-migrate/>`_ - The original
+* `SQLAlchemy-Migrate <https://github.com/openstack/sqlalchemy-migrate>`_ - The original
   migration tool for SQLAlchemy, SQLAlchemy-Migrate is widely used and continues
   under active development.   SQLAlchemy-Migrate includes features such as
   SQL script generation, ORM class generation, ORM model comparison, and extensive
@@ -303,29 +303,41 @@ described in the individual documentation sections for each dialect.
 Column, Table, MetaData API
 ---------------------------
 
+.. attribute:: sqlalchemy.schema.BLANK_SCHEMA
+
+    Symbol indicating that a :class:`.Table` or :class:`.Sequence`
+    should have 'None' for its schema, even if the parent
+    :class:`.MetaData` has specified a schema.
+
+    .. seealso::
+
+        :paramref:`.MetaData.schema`
+
+        :paramref:`.Table.schema`
+
+        :paramref:`.Sequence.schema`
+
+    .. versionadded:: 1.0.14
+
+
 .. autoclass:: Column
     :members:
     :inherited-members:
-    :undoc-members:
 
 
 .. autoclass:: MetaData
     :members:
-    :undoc-members:
 
 
 .. autoclass:: SchemaItem
     :members:
-    :undoc-members:
 
 .. autoclass:: Table
     :members:
     :inherited-members:
-    :undoc-members:
 
 
 .. autoclass:: ThreadLocalMetaData
     :members:
-    :undoc-members:
 
 

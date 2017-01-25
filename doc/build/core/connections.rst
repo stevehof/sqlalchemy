@@ -34,7 +34,9 @@ per-object or per-function call.
 
 For a multiple-process application that uses the ``os.fork`` system call, or
 for example the Python ``multiprocessing`` module, it's usually required that a
-separate :class:`.Engine` be used for each child process. This is because the
+separate :class:`.Engine` be used for each child process, or
+that the :meth:`.Engine.dispose` method is called at the start of
+the process to flush existing connections. This is because the
 :class:`.Engine` maintains a reference to a connection pool that ultimately
 references DBAPI connections - these tend to not be portable across process
 boundaries. An :class:`.Engine` that is configured not to use pooling (which
@@ -48,7 +50,7 @@ way is first procure a connection resource, which you get via the
     connection = engine.connect()
     result = connection.execute("select username from users")
     for row in result:
-        print "username:", row['username']
+        print("username:", row['username'])
     connection.close()
 
 The connection is an instance of :class:`.Connection`,
@@ -76,7 +78,7 @@ The above procedure can be performed in a shorthand way by using the
 
     result = engine.execute("select username from users")
     for row in result:
-        print "username:", row['username']
+        print("username:", row['username'])
 
 Where above, the :meth:`~.Engine.execute` method acquires a new
 :class:`.Connection` on its own, executes the statement with that object,
@@ -251,7 +253,7 @@ of :class:`.Engine`::
 
     result = engine.execute("select username from users")
     for row in result:
-        print "username:", row['username']
+        print("username:", row['username'])
 
 In addition to "connectionless" execution, it is also possible
 to use the :meth:`~.Executable.execute` method of

@@ -1,11 +1,11 @@
 # ext/automap.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
-"""Define an extension to the :mod:`sqlalchemy.ext.declarative` system
+r"""Define an extension to the :mod:`sqlalchemy.ext.declarative` system
 which automatically generates mapped classes and relationships from a database
 schema, typically though not necessarily one which is reflected.
 
@@ -13,7 +13,7 @@ schema, typically though not necessarily one which is reflected.
 
 It is hoped that the :class:`.AutomapBase` system provides a quick
 and modernized solution to the problem that the very famous
-`SQLSoup <https://sqlsoup.readthedocs.org/en/latest/>`_
+`SQLSoup <https://sqlsoup.readthedocs.io/en/latest/>`_
 also tries to solve, that of generating a quick and rudimentary object
 model from an existing database on the fly.  By addressing the issue strictly
 at the mapper configuration level, and integrating fully with existing
@@ -111,8 +111,8 @@ explicit table declaration::
     User, Address, Order = Base.classes.user, Base.classes.address,\
         Base.classes.user_order
 
-Specifying Classes Explcitly
-============================
+Specifying Classes Explicitly
+=============================
 
 The :mod:`.sqlalchemy.ext.automap` extension allows classes to be defined
 explicitly, in a way similar to that of the :class:`.DeferredReflection` class.
@@ -187,8 +187,8 @@ scheme for class names and a "pluralizer" for collection names using the
         "Produce a 'camelized' class name, e.g. "
         "'words_and_underscores' -> 'WordsAndUnderscores'"
 
-        return str(tablename[0].upper() + \\
-                re.sub(r'_(\w)', lambda m: m.group(1).upper(), tablename[1:]))
+        return str(tablename[0].upper() + \
+                re.sub(r'_([a-z])', lambda m: m.group(1).upper(), tablename[1:]))
 
     _pluralizer = inflect.engine()
     def pluralize_collection(base, local_cls, referred_cls, constraint):
@@ -196,10 +196,9 @@ scheme for class names and a "pluralizer" for collection names using the
         "'SomeTerm' -> 'some_terms'"
 
         referred_name = referred_cls.__name__
-        uncamelized = referred_name[0].lower() + \\
-                        re.sub(r'\W',
-                                lambda m: "_%s" % m.group(0).lower(),
-                                referred_name[1:])
+        uncamelized = re.sub(r'[A-Z]',
+                             lambda m: "_%s" % m.group(0).lower(),
+                             referred_name)[1:]
         pluralized = _pluralizer.plural(uncamelized)
         return pluralized
 
@@ -607,7 +606,7 @@ def name_for_collection_relationship(
 
 def generate_relationship(
         base, direction, return_fn, attrname, local_cls, referred_cls, **kw):
-    """Generate a :func:`.relationship` or :func:`.backref` on behalf of two
+    r"""Generate a :func:`.relationship` or :func:`.backref` on behalf of two
     mapped classes.
 
     An alternate implementation of this function can be specified using the
@@ -811,7 +810,7 @@ class AutomapBase(object):
 
 
 def automap_base(declarative_base=None, **kw):
-    """Produce a declarative automap base.
+    r"""Produce a declarative automap base.
 
     This function produces a new base class that is a product of the
     :class:`.AutomapBase` class as well a declarative base produced by

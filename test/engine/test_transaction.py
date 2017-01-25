@@ -218,6 +218,27 @@ class TransactionTest(fixtures.TestBase):
         finally:
             connection.close()
 
+    @testing.requires.python2
+    @testing.requires.savepoints_w_release
+    def test_savepoint_release_fails_warning(self):
+        with testing.db.connect() as connection:
+            connection.begin()
+
+            with expect_warnings(
+                "An exception has occurred during handling of a previous "
+                "exception.  The previous exception "
+                r"is:.*..SQL\:.*RELEASE SAVEPOINT"
+            ):
+                def go():
+                    with connection.begin_nested() as savepoint:
+                        connection.dialect.do_release_savepoint(
+                            connection, savepoint._savepoint)
+                assert_raises_message(
+                    exc.DBAPIError,
+                    r".*SQL\:.*ROLLBACK TO SAVEPOINT",
+                    go
+                )
+
     def test_retains_through_options(self):
         connection = testing.db.connect()
         try:
@@ -386,6 +407,9 @@ class TransactionTest(fixtures.TestBase):
     # PG emergency shutdown:
     # select * from pg_prepared_xacts
     # ROLLBACK PREPARED '<xid>'
+    # MySQL emergency shutdown:
+    # for arg in `mysql -u root -e "xa recover" | cut -c 8-100 |
+    #     grep sa`; do mysql -u root -e "xa rollback '$arg'"; done
     @testing.crashes('mysql', 'Crashing on 5.5, not worth it')
     @testing.requires.skip_mysql_on_windows
     @testing.requires.two_phase_transactions
@@ -412,12 +436,7 @@ class TransactionTest(fixtures.TestBase):
         connection.close()
 
     @testing.requires.two_phase_transactions
-    @testing.crashes('mysql+oursql',
-                     'Times out in full test runs only, causing '
-                     'subsequent tests to fail')
-    @testing.crashes('mysql+zxjdbc',
-                     'Deadlocks, causing subsequent tests to fail')
-    @testing.fails_on('mysql', 'FIXME: unknown')
+    @testing.requires.two_phase_recovery
     def test_two_phase_recover(self):
 
         # MySQL recovery doesn't currently seem to work correctly

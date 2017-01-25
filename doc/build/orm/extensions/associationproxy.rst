@@ -151,7 +151,7 @@ Simplifying Association Objects
 
 The "association object" pattern is an extended form of a many-to-many
 relationship, and is described at :ref:`association_pattern`. Association
-proxies are useful for keeping "association objects" out the way during
+proxies are useful for keeping "association objects" out of the way during
 regular use.
 
 Suppose our ``userkeywords`` table above had additional columns
@@ -509,5 +509,6 @@ API Documentation
 .. autoclass:: AssociationProxy
    :members:
    :undoc-members:
+   :inherited-members:
 
 .. autodata:: ASSOCIATION_PROXY

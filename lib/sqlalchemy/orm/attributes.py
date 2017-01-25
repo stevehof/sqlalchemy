@@ -1,5 +1,5 @@
 # orm/attributes.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -382,7 +382,7 @@ class AttributeImpl(object):
                  parent_token=None, expire_missing=True,
                  send_modified_events=True,
                  **kwargs):
-        """Construct an AttributeImpl.
+        r"""Construct an AttributeImpl.
 
         \class_
           associated class
@@ -550,6 +550,11 @@ class AttributeImpl(object):
 
     def initialize(self, state, dict_):
         """Initialize the given state's attribute with an empty value."""
+
+        # As of 1.0, we don't actually set a value in
+        # dict_.  This is so that the state of the object does not get
+        # modified without emitting the appropriate events.
+
 
         return None
 

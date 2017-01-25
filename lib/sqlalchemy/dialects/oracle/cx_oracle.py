@@ -1,5 +1,5 @@
 # oracle/cx_oracle.py
-# Copyright (C) 2005-2015 the SQLAlchemy authors and contributors
+# Copyright (C) 2005-2017 the SQLAlchemy authors and contributors
 # <see AUTHORS file>
 #
 # This module is part of SQLAlchemy and is released under
@@ -293,6 +293,7 @@ from .base import OracleCompiler, OracleDialect, OracleExecutionContext
 from . import base as oracle
 from ...engine import result as _result
 from sqlalchemy import types as sqltypes, util, exc, processors
+from sqlalchemy import util
 import random
 import collections
 import decimal
@@ -719,8 +720,10 @@ class OracleDialect_cx_oracle(OracleDialect):
             # this occurs in tests with mock DBAPIs
             self._cx_oracle_string_types = set()
             self._cx_oracle_with_unicode = False
-        elif self.cx_oracle_ver >= (5,) and not \
-                hasattr(self.dbapi, 'UNICODE'):
+        elif util.py3k or (
+                self.cx_oracle_ver >= (5,) and not \
+                hasattr(self.dbapi, 'UNICODE')
+        ):
             # cx_Oracle WITH_UNICODE mode.  *only* python
             # unicode objects accepted for anything
             self.supports_unicode_statements = True
@@ -895,12 +898,16 @@ class OracleDialect_cx_oracle(OracleDialect):
             dsn = url.host
 
         opts = dict(
-            user=url.username,
-            password=url.password,
-            dsn=dsn,
             threaded=self.threaded,
             twophase=self.allow_twophase,
         )
+
+        if dsn is not None:
+            opts['dsn'] = dsn
+        if url.password is not None:
+            opts['password'] = url.password
+        if url.username is not None:
+            opts['user'] = url.username
 
         if util.py2k:
             if self._cx_oracle_with_unicode:

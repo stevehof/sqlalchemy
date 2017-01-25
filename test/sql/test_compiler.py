@@ -18,7 +18,7 @@ from sqlalchemy import Integer, String, MetaData, Table, Column, select, \
     literal, and_, null, type_coerce, alias, or_, literal_column,\
     Float, TIMESTAMP, Numeric, Date, Text, union, except_,\
     intersect, union_all, Boolean, distinct, join, outerjoin, asc, desc,\
-    over, subquery, case, true
+    over, subquery, case, true, CheckConstraint
 import decimal
 from sqlalchemy.util import u
 from sqlalchemy import exc, sql, util, types, schema
@@ -637,6 +637,21 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
             "myothertable.otherid = :otherid_2)) AS anon_1"
         )
 
+        self.assert_compile(
+            select([exists([1])]),
+            "SELECT EXISTS (SELECT 1) AS anon_1"
+        )
+
+        self.assert_compile(
+            select([~exists([1])]),
+            "SELECT NOT (EXISTS (SELECT 1)) AS anon_1"
+        )
+
+        self.assert_compile(
+            select([~(~exists([1]))]),
+            "SELECT NOT (NOT (EXISTS (SELECT 1))) AS anon_1"
+        )
+
     def test_where_subquery(self):
         s = select([addresses.c.street], addresses.c.user_id
                    == users.c.user_id, correlate=True).alias('s')
@@ -726,8 +741,8 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
         assert_raises_message(
             exc.InvalidRequestError,
             r"Select objects don't have a type\.  Call as_scalar\(\) "
-            "on this Select object to return a 'scalar' "
-            "version of this Select\.",
+            r"on this Select object to return a 'scalar' "
+            r"version of this Select\.",
             func.coalesce, select([table1.c.myid])
         )
 
@@ -2040,6 +2055,8 @@ class SelectTest(fixtures.TestBase, AssertsCompiledSQL):
                 'Incorrect number of expected results')
             eq_(str(cast(tbl.c.v1, Numeric).compile(dialect=dialect)),
                 'CAST(casttest.v1 AS %s)' % expected_results[0])
+            eq_(str(tbl.c.v1.cast(Numeric).compile(dialect=dialect)),
+                'CAST(casttest.v1 AS %s)' % expected_results[0])
             eq_(str(cast(tbl.c.v1, Numeric(12, 9)).compile(dialect=dialect)),
                 'CAST(casttest.v1 AS %s)' % expected_results[1])
             eq_(str(cast(tbl.c.ts, Date).compile(dialect=dialect)),
@@ -2588,6 +2605,31 @@ class KwargPropagationTest(fixtures.TestBase):
 class CRUDTest(fixtures.TestBase, AssertsCompiledSQL):
     __dialect__ = 'default'
 
+    def test_insert_literal_binds(self):
+        stmt = table1.insert().values(myid=3, name='jack')
+
+        self.assert_compile(
+            stmt,
+            "INSERT INTO mytable (myid, name) VALUES (3, 'jack')",
+            literal_binds=True)
+
+    def test_update_literal_binds(self):
+        stmt = table1.update().values(name='jack').\
+            where(table1.c.name == 'jill')
+
+        self.assert_compile(
+            stmt,
+            "UPDATE mytable SET name='jack' WHERE mytable.name = 'jill'",
+            literal_binds=True)
+
+    def test_delete_literal_binds(self):
+        stmt = table1.delete().where(table1.c.name == 'jill')
+
+        self.assert_compile(
+            stmt,
+            "DELETE FROM mytable WHERE mytable.name = 'jill'",
+            literal_binds=True)
+
     def test_correlated_update(self):
         # test against a straight text subquery
         u = update(
@@ -2747,48 +2789,6 @@ class CRUDTest(fixtures.TestBase, AssertsCompiledSQL):
                 'x2': 1,
                 'y': 2})
 
-    def test_unconsumed_names(self):
-        t = table("t", column("x"), column("y"))
-        t2 = table("t2", column("q"), column("z"))
-        assert_raises_message(
-            exc.CompileError,
-            "Unconsumed column names: z",
-            t.insert().values(x=5, z=5).compile,
-        )
-        assert_raises_message(
-            exc.CompileError,
-            "Unconsumed column names: z",
-            t.update().values(x=5, z=5).compile,
-        )
-
-        assert_raises_message(
-            exc.CompileError,
-            "Unconsumed column names: j",
-            t.update().values(x=5, j=7).values({t2.c.z: 5}).
-            where(t.c.x == t2.c.q).compile,
-        )
-
-        # bindparam names don't get counted
-        i = t.insert().values(x=3 + bindparam('x2'))
-        self.assert_compile(
-            i,
-            "INSERT INTO t (x) VALUES ((:param_1 + :x2))"
-        )
-
-        # even if in the params list
-        i = t.insert().values(x=3 + bindparam('x2'))
-        self.assert_compile(
-            i,
-            "INSERT INTO t (x) VALUES ((:param_1 + :x2))",
-            params={"x2": 1}
-        )
-
-        assert_raises_message(
-            exc.CompileError,
-            "Unconsumed column names: j",
-            t.update().values(x=5, j=7).compile,
-            column_keys=['j']
-        )
 
     def test_labels_no_collision(self):
 
@@ -2853,6 +2853,30 @@ class DDLTest(fixtures.TestBase, AssertsCompiledSQL):
         self.assert_compile(
             schema.CreateTable(t2),
             "CREATE TABLE t (x INTEGER, z INTEGER)"
+        )
+
+    def test_table_no_cols(self):
+        m = MetaData()
+        t1 = Table('t1', m)
+        self.assert_compile(
+            schema.CreateTable(t1),
+            "CREATE TABLE t1 ()"
+        )
+
+    def test_table_no_cols_w_constraint(self):
+        m = MetaData()
+        t1 = Table('t1', m, CheckConstraint('a = 1'))
+        self.assert_compile(
+            schema.CreateTable(t1),
+            "CREATE TABLE t1 (CHECK (a = 1))"
+        )
+
+    def test_table_one_col_w_constraint(self):
+        m = MetaData()
+        t1 = Table('t1', m, Column('q', Integer), CheckConstraint('a = 1'))
+        self.assert_compile(
+            schema.CreateTable(t1),
+            "CREATE TABLE t1 (q INTEGER, CHECK (a = 1))"
         )
 
 
@@ -3536,3 +3560,66 @@ class ResultMapTest(fixtures.TestBase):
                     (table1.c.description, 'description', 'description'),
                     table1.c.description.type)}
         )
+
+    def test_select_wraps_for_translate_ambiguity(self):
+        # test for issue #3657
+        t = table('a', column('x'), column('y'), column('z'))
+
+        l1, l2, l3 = t.c.z.label('a'), t.c.x.label('b'), t.c.x.label('c')
+        orig = [t.c.x, t.c.y, l1, l2, l3]
+        stmt = select(orig)
+        wrapped = stmt._generate()
+        wrapped = wrapped.column(
+            func.ROW_NUMBER().over(order_by=t.c.z)).alias()
+
+        wrapped_again = select([c for c in wrapped.c])
+
+        compiled = wrapped_again.compile(
+            compile_kwargs={'select_wraps_for': stmt})
+
+        proxied = [obj[0] for (k, n, obj, type_) in compiled._result_columns]
+        for orig_obj, proxied_obj in zip(
+            orig,
+            proxied
+        ):
+            is_(orig_obj, proxied_obj)
+
+    def test_select_wraps_for_translate_ambiguity_dupe_cols(self):
+        # test for issue #3657
+        t = table('a', column('x'), column('y'), column('z'))
+
+        l1, l2, l3 = t.c.z.label('a'), t.c.x.label('b'), t.c.x.label('c')
+        orig = [t.c.x, t.c.y, l1, l2, l3]
+
+        # create the statement with some duplicate columns.  right now
+        # the behavior is that these redundant columns are deduped.
+        stmt = select([t.c.x, t.c.y, l1, t.c.y, l2, t.c.x, l3])
+
+        # so the statement has 7 inner columns...
+        eq_(len(list(stmt.inner_columns)), 7)
+
+        # but only exposes 5 of them, the other two are dupes of x and y
+        eq_(len(stmt.c), 5)
+
+        # and when it generates a SELECT it will also render only 5
+        eq_(len(stmt._columns_plus_names), 5)
+
+        wrapped = stmt._generate()
+        wrapped = wrapped.column(
+            func.ROW_NUMBER().over(order_by=t.c.z)).alias()
+
+        # so when we wrap here we're going to have only 5 columns
+        wrapped_again = select([c for c in wrapped.c])
+
+        # so the compiler logic that matches up the "wrapper" to the
+        # "select_wraps_for" can't use inner_columns to match because
+        # these collections are not the same
+        compiled = wrapped_again.compile(
+            compile_kwargs={'select_wraps_for': stmt})
+
+        proxied = [obj[0] for (k, n, obj, type_) in compiled._result_columns]
+        for orig_obj, proxied_obj in zip(
+            orig,
+            proxied
+        ):
+            is_(orig_obj, proxied_obj)
