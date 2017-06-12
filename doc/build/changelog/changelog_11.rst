@@ -19,6 +19,67 @@
         :start-line: 5
 
 .. changelog::
+    :version: 1.1.10
+    :released: Friday, May 19, 2017
+
+    .. change:: 3986
+        :tags: bug, orm
+        :versions: 1.2.0b1
+        :tickets: 3986
+
+        Fixed bug where a cascade such as "delete-orphan" (but others as well)
+        would fail to locate an object linked to a relationship that itself
+        is local to a subclass in an inheritance relationship, thus causing
+        the operation to not take place.
+
+    .. change:: 3975
+        :tags: bug, oracle
+        :versions: 1.2.0b1
+        :tickets: 3975
+
+        Fixed bug in cx_Oracle dialect where version string parsing would
+        fail for cx_Oracle version 6.0b1 due to the "b" character.  Version
+        string parsing is now via a regexp rather than a simple split.
+
+    .. change:: 3980
+        :tags: bug, ext
+        :versions: 1.2.0b1
+        :tickets: 3980
+
+        Protected against testing "None" as a class in the case where
+        declarative classes are being garbage collected and new
+        automap prepare() operations are taking place concurrently, very
+        infrequently hitting a weakref that has not been fully acted upon
+        after gc.
+
+    .. change::
+        :tags: bug, postgresql
+        :versions: 1.2.0b1
+
+        Added "autocommit" support for GRANT, REVOKE keywords.  Pull request
+        courtesy Jacob Hayes.
+
+    .. change:: 3966
+        :tags: bug, mysql
+        :versions: 1.2.0b1
+        :tickets: 3966
+
+        Removed an ancient and unnecessary intercept of the UTC_TIMESTAMP
+        MySQL function, which was getting in the way of using it with a
+        parameter.
+
+    .. change:: 3961
+        :tags: bug, mysql
+        :versions: 1.2.0b1
+        :tickets: 3961
+
+        Fixed bug in MySQL dialect regarding rendering of table options in
+        conjunction with PARTITION options when rendering CREATE TABLE.
+        The PARTITION related options need to follow the table options,
+        whereas previously this ordering was not enforced.
+
+
+.. changelog::
     :version: 1.1.9
     :released: April 4, 2017
 
