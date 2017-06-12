@@ -19,6 +19,44 @@
         :start-line: 5
 
 .. changelog::
+    :version: 1.1.9
+    :released: April 4, 2017
+
+    .. change:: 3956
+        :tags: bug, ext
+        :tickets: 3956
+
+        Fixed regression released in 1.1.8 due to :ticket:`3950` where the
+        deeper search for information about column types in the case of a
+        "schema type" or a :class:`.TypeDecorator` would produce an attribute
+        error if the mapping also contained a :obj:`.column_property`.
+
+    .. change:: 3952
+        :tags: bug, sql
+        :versions: 1.2.0b1
+        :tickets: 3952
+
+        Fixed regression released in 1.1.5 due to :ticket:`3859` where
+        adjustments to the "right-hand-side" evaluation of an expression
+        based on :class:`.Variant` to honor the underlying type's
+        "right-hand-side" rules caused the :class:`.Variant` type
+        to be inappropriately lost, in those cases when we *do* want the
+        left-hand side type to be transferred directly to the right hand side
+        so that bind-level rules can be applied to the expression's argument.
+
+    .. change:: 3955
+        :tags: bug, sql, postgresql
+        :versions: 1.2.0b1
+        :tickets: 3955
+
+        Changed the mechanics of :class:`.ResultProxy` to unconditionally
+        delay the "autoclose" step until the :class:`.Connection` is done
+        with the object; in the case where Postgresql ON CONFLICT with
+        RETURNING returns no rows, autoclose was occurring in this previously
+        non-existent use case, causing the usual autocommit behavior that
+        occurs unconditionally upon INSERT/UPDATE/DELETE to fail.
+
+.. changelog::
     :version: 1.1.8
     :released: March 31, 2017
 
