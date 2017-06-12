@@ -19,6 +19,41 @@
         :start-line: 5
 
 .. changelog::
+    :version: 1.1.8
+    :released: March 31, 2017
+
+    .. change:: 3950
+        :tags: bug, ext
+        :versions: 1.2.0b1
+        :tickets: 3950
+
+        Fixed bug in :mod:`sqlalchemy.ext.mutable` where the
+        :meth:`.Mutable.as_mutable` method would not track a type that had
+        been copied using :meth:`.TypeEngine.copy`.  This became more of
+        a regression in 1.1 compared to 1.0 because the :class:`.TypeDecorator`
+        class is now a subclass of :class:`.SchemaEventTarget`, which among
+        other things indicates to the parent :class:`.Column` that the type
+        should be copied when the :class:`.Column` is.  These copies are
+        common when using declarative with mixins or abstract classes.
+
+    .. change::
+        :tags: bug, ext
+        :versions: 1.2.0b1
+
+        Added support for bound parameters, e.g. those normally set up
+        via :meth:`.Query.params`, to the :meth:`.baked.Result.count`
+        method.  Previously, support for parameters were omitted. Pull request
+        courtesy Pat Deegan.
+
+    .. change::
+        :tags: bug, postgresql
+        :versions: 1.2.0b1
+
+        Added support for parsing the Postgresql version string for
+        a development version like "PostgreSQL 10devel".  Pull request
+        courtesy Sean McCully.
+
+.. changelog::
     :version: 1.1.7
     :released: March 27, 2017
 
