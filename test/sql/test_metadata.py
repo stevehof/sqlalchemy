@@ -185,7 +185,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
             eq_(getattr(fk2c, k), kw[k])
 
     def test_check_constraint_copy(self):
-        r = lambda x: x
+        def r(x): return x
         c = CheckConstraint("foo bar",
                             name='name',
                             initially=True,
@@ -1532,6 +1532,7 @@ class PKAutoIncrementTest(fixtures.TestBase):
 
 
 class SchemaTypeTest(fixtures.TestBase):
+    __backend__ = True
 
     class TrackEvents(object):
         column = None
@@ -1606,7 +1607,7 @@ class SchemaTypeTest(fixtures.TestBase):
             impl = target_typ
 
         typ = MyType()
-        self._test_before_parent_attach(typ, target_typ)
+        self._test_before_parent_attach(typ, target_typ, double=True)
 
     def test_before_parent_attach_typedec_of_schematype(self):
         class MyType(TypeDecorator, sqltypes.SchemaType):
@@ -1622,17 +1623,52 @@ class SchemaTypeTest(fixtures.TestBase):
         typ = MyType()
         self._test_before_parent_attach(typ)
 
-    def _test_before_parent_attach(self, typ, evt_target=None):
+    def _test_before_parent_attach(self, typ, evt_target=None, double=False):
         canary = mock.Mock()
 
         if evt_target is None:
             evt_target = typ
 
-        event.listen(evt_target, "before_parent_attach", canary.go)
+        orig_set_parent = evt_target._set_parent
+        orig_set_parent_w_dispatch = evt_target._set_parent_with_dispatch
 
-        c = Column('q', typ)
+        def _set_parent(parent):
+            orig_set_parent(parent)
+            canary._set_parent(parent)
 
-        eq_(canary.mock_calls, [mock.call.go(evt_target, c)])
+        def _set_parent_w_dispatch(parent):
+            orig_set_parent_w_dispatch(parent)
+            canary._set_parent_with_dispatch(parent)
+
+        with mock.patch.object(evt_target, '_set_parent', _set_parent):
+            with mock.patch.object(
+                    evt_target, '_set_parent_with_dispatch',
+                    _set_parent_w_dispatch):
+                event.listen(evt_target, "before_parent_attach", canary.go)
+
+                c = Column('q', typ)
+
+        if double:
+            # no clean way yet to fix this, inner schema type is called
+            # twice, but this is a very unusual use case.
+            eq_(
+                canary.mock_calls,
+                [
+                    mock.call._set_parent(c),
+                    mock.call.go(evt_target, c),
+                    mock.call._set_parent(c),
+                    mock.call._set_parent_with_dispatch(c)
+                ]
+            )
+        else:
+            eq_(
+                canary.mock_calls,
+                [
+                    mock.call.go(evt_target, c),
+                    mock.call._set_parent(c),
+                    mock.call._set_parent_with_dispatch(c)
+                ]
+            )
 
     def test_independent_schema(self):
         m = MetaData()
@@ -2183,7 +2219,6 @@ class ConstraintTest(fixtures.TestBase):
         else:
             eq_(list(i.columns), [])
         assert i.table is t
-
 
     def test_separate_decl_columns(self):
         m = MetaData()

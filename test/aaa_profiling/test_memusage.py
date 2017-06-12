@@ -34,7 +34,8 @@ class ASub(A):
     pass
 
 
-def profile_memory(maxtimes=50):
+def profile_memory(maxtimes=50,
+                   assert_no_sessions=True, get_num_objects=None):
     def decorate(func):
         # run the test N times.  if length of gc.get_objects()
         # keeps growing, assert false
@@ -56,15 +57,19 @@ def profile_memory(maxtimes=50):
             samples = []
 
             success = False
-            for y in range(maxtimes // 5):
+            for y in range(100 // 5):
                 for x in range(5):
                     func(*args)
                     gc_collect()
-                    samples.append(len(get_objects_skipping_sqlite_issue()))
+                    samples.append(
+                        get_num_objects() if get_num_objects is not None
+                        else len(get_objects_skipping_sqlite_issue())
+                    )
 
                 print("sample gc sizes:", samples)
 
-                assert len(_sessions) == 0
+                if assert_no_sessions:
+                    assert len(_sessions) == 0
 
                 # check for "flatline" - size is constant for
                 # 5 iterations
@@ -341,6 +346,43 @@ class MemUsageTest(EnsureZeroed):
         finally:
             metadata.drop_all()
 
+    @testing.requires.savepoints
+    @testing.provide_metadata
+    def test_savepoints(self):
+        metadata = self.metadata
+
+        some_table = Table(
+            't', metadata,
+            Column('id', Integer, primary_key=True,
+                   test_needs_autoincrement=True)
+        )
+
+        class SomeClass(object):
+            pass
+
+        mapper(SomeClass, some_table)
+
+        metadata.create_all()
+
+        session = Session(testing.db)
+
+        target_strings = session.connection().\
+            dialect.identifier_preparer._strings
+
+        with session.transaction:
+            @profile_memory(
+                assert_no_sessions=False,
+                get_num_objects=lambda: len(target_strings))
+            def go():
+
+                sc = SomeClass()
+                session.add(sc)
+
+                with session.begin_nested():
+                    session.query(SomeClass).first()
+
+            go()
+
     @testing.crashes('mysql+cymysql', 'blocking')
     def test_unicode_warnings(self):
         metadata = MetaData(self.engine)
@@ -368,8 +410,8 @@ class MemUsageTest(EnsureZeroed):
             # execute with a non-unicode object. a warning is emitted,
             # this warning shouldn't clog up memory.
 
-            self.engine.execute(table1.select().where(table1.c.col2
-                                                     == 'foo%d' % i[0]))
+            self.engine.execute(table1.select().where(
+                table1.c.col2 == 'foo%d' % i[0]))
             i[0] += 1
         try:
             go()

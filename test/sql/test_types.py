@@ -16,7 +16,7 @@ from sqlalchemy.sql import visitors
 from sqlalchemy import inspection
 from sqlalchemy import exc, types, util, dialects
 from sqlalchemy.util import OrderedDict
-for name in dialects.__all__:
+for name in dialects.__all__:  # noqa
     __import__("sqlalchemy.dialects.%s" % name)
 from sqlalchemy.sql import operators, column, table, null
 from sqlalchemy.schema import CheckConstraint, AddConstraint
@@ -29,8 +29,6 @@ from sqlalchemy.testing.util import picklers
 from sqlalchemy.testing.util import round_decimal
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import mock
-
-
 
 
 class AdaptTest(fixtures.TestBase):
@@ -305,14 +303,14 @@ class UserDefinedTest(fixtures.TablesTest, AssertsCompiledSQL):
             user_id=4, goofy='fred', goofy2='fred', goofy4=util.u('fred'),
             goofy7=util.u('fred'), goofy8=9, goofy9=9)
 
-        l = users.select().order_by(users.c.user_id).execute().fetchall()
+        result = users.select().order_by(users.c.user_id).execute().fetchall()
         for assertstr, assertint, assertint2, row in zip(
             [
                 "BIND_INjackBIND_OUT", "BIND_INlalaBIND_OUT",
                 "BIND_INfredBIND_OUT"],
             [1200, 1500, 900],
             [1800, 2250, 1350],
-            l
+            result
         ):
             for col in list(row)[1:5]:
                 eq_(col, assertstr)
@@ -890,7 +888,6 @@ class TypeCoerceCastTest(fixtures.TablesTest):
             [('BIND_INd1BIND_OUT', )])
 
 
-
 class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
 
     def setup(self):
@@ -1120,9 +1117,9 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
             Column("id", Integer, primary_key=True),
             Column('someenum', Enum('one', 'two', 'three', native_enum=False)),
             Column('someotherenum',
-                Enum('one', 'two', 'three',
-                     create_constraint=False, native_enum=False,
-                     validate_strings=True)),
+                   Enum('one', 'two', 'three',
+                        create_constraint=False, native_enum=False,
+                        validate_strings=True)),
         )
 
         Table(
@@ -1318,18 +1315,69 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
                 non_native_enum_table.insert(), {"id": 1, "someenum": None})
             eq_(conn.scalar(select([non_native_enum_table.c.someenum])), None)
 
-
-    @testing.fails_on(
-        'mysql',
-        "The CHECK clause is parsed but ignored by all storage engines.")
-    @testing.fails_on(
-        'mssql', "FIXME: MS-SQL 2005 doesn't honor CHECK ?!?")
+    @testing.requires.enforces_check_constraints
     def test_check_constraint(self):
         assert_raises(
             (exc.IntegrityError, exc.ProgrammingError),
             testing.db.execute,
             "insert into non_native_enum_table "
             "(id, someenum) values(1, 'four')")
+
+    @testing.requires.enforces_check_constraints
+    @testing.provide_metadata
+    def test_variant_we_are_default(self):
+        # test that the "variant" does not create a constraint
+        t = Table(
+            'my_table', self.metadata,
+            Column(
+                'data', Enum("one", "two", "three", name="e1").with_variant(
+                    Enum("four", "five", "six", name="e2"), "some_other_db"
+                )
+            )
+        )
+
+        eq_(
+            len([c for c in t.constraints if isinstance(c, CheckConstraint)]),
+            2
+        )
+
+        with testing.db.connect() as conn:
+            self.metadata.create_all(conn)
+            assert_raises(
+                (exc.IntegrityError, exc.ProgrammingError, exc.DataError),
+                conn.execute,
+                "insert into my_table "
+                "(data) values('four')")
+            conn.execute("insert into my_table (data) values ('two')")
+
+    @testing.requires.enforces_check_constraints
+    @testing.provide_metadata
+    def test_variant_we_are_not_default(self):
+        # test that the "variant" does not create a constraint
+        t = Table(
+            'my_table', self.metadata,
+            Column(
+                'data', Enum("one", "two", "three", name="e1").with_variant(
+                    Enum("four", "five", "six", name="e2"),
+                    testing.db.dialect.name
+                )
+            )
+        )
+
+        # ensure Variant isn't exploding the constraints
+        eq_(
+            len([c for c in t.constraints if isinstance(c, CheckConstraint)]),
+            2
+        )
+
+        with testing.db.connect() as conn:
+            self.metadata.create_all(conn)
+            assert_raises(
+                (exc.IntegrityError, exc.ProgrammingError, exc.DataError),
+                conn.execute,
+                "insert into my_table "
+                "(data) values('two')")
+            conn.execute("insert into my_table (data) values ('four')")
 
     def test_skip_check_constraint(self):
         with testing.db.connect() as conn:
@@ -1466,6 +1514,7 @@ class EnumTest(AssertsCompiledSQL, fixtures.TablesTest):
             "Enum('x', 'y', name='somename', "
             "inherit_schema=True, native_enum=False)")
 
+
 binary_table = MyPickleType = metadata = None
 
 
@@ -1536,14 +1585,14 @@ class BinaryTest(fixtures.TestBase, AssertsExecutionResults):
                     'data': LargeBinary, 'data_slice': LargeBinary},
                 bind=testing.db)
         ):
-            l = stmt.execute().fetchall()
-            eq_(stream1, l[0]['data'])
-            eq_(stream1[0:100], l[0]['data_slice'])
-            eq_(stream2, l[1]['data'])
-            eq_(testobj1, l[0]['pickled'])
-            eq_(testobj2, l[1]['pickled'])
-            eq_(testobj3.moredata, l[0]['mypickle'].moredata)
-            eq_(l[0]['mypickle'].stuff, 'this is the right stuff')
+            result = stmt.execute().fetchall()
+            eq_(stream1, result[0]['data'])
+            eq_(stream1[0:100], result[0]['data_slice'])
+            eq_(stream2, result[1]['data'])
+            eq_(testobj1, result[0]['pickled'])
+            eq_(testobj2, result[1]['pickled'])
+            eq_(testobj3.moredata, result[0]['mypickle'].moredata)
+            eq_(result[0]['mypickle'].stuff, 'this is the right stuff')
 
     @testing.requires.binary_comparisons
     def test_comparison(self):
@@ -1720,6 +1769,7 @@ class JSONTest(fixtures.TestBase):
 
         bindproc = expr.right.type._cached_literal_processor(non_str_dialect)
         eq_(bindproc(expr.right.value), "'five'")
+
 
 class ArrayTest(fixtures.TestBase):
 
@@ -1987,7 +2037,6 @@ class ExpressionTest(
         tab = table('test', column('bvalue', MyTypeDec))
         expr = tab.c.bvalue + 6
 
-
         self.assert_compile(
             expr,
             "test.bvalue || :bvalue_1",
@@ -2036,7 +2085,7 @@ class ExpressionTest(
         # untyped bind - it gets assigned MyFoobarType
         bp = bindparam("foo")
         expr = column("foo", MyFoobarType) + bp
-        assert bp.type._type_affinity is types.NullType
+        assert bp.type._type_affinity is types.NullType  # noqa
         assert expr.right.type._type_affinity is MyFoobarType
 
         expr = column("foo", MyFoobarType) + bindparam("foo", type_=Integer)
@@ -2133,7 +2182,6 @@ class ExpressionTest(
             bindparam('x', m1).type,
             types.NULLTYPE
         )
-
 
 
 class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
@@ -2296,6 +2344,7 @@ class NumericRawSQLTest(fixtures.TestBase):
         else:
             eq_(val, 46.583)
 
+
 interval_table = metadata = None
 
 
@@ -2443,7 +2492,8 @@ class BooleanTest(
         boolean_table = self.tables.boolean_table
         with testing.db.connect() as conn:
             conn.execute(
-                "insert into boolean_table (id, unconstrained_value) values (1, 5)"
+                "insert into boolean_table (id, unconstrained_value) "
+                "values (1, 5)"
             )
 
             eq_(
@@ -2455,6 +2505,7 @@ class BooleanTest(
                 conn.scalar(select([boolean_table.c.unconstrained_value])),
                 True
             )
+
 
 class PickleTest(fixtures.TestBase):
 
@@ -2482,6 +2533,7 @@ class PickleTest(fixtures.TestBase):
             pickleable.OldSchool(10, 11)
         ):
             assert p1.compare_values(p1.copy_value(obj), obj)
+
 
 meta = None
 
